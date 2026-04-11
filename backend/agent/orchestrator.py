@@ -83,6 +83,11 @@ MCP_SERVERS_CONFIG = {
         "args": [str(_SERVERS_DIR / "it_server.py")],
         "transport": "stdio",
     },
+    "knowledge": {
+        "command": "python",
+        "args": [str(_SERVERS_DIR / "knowledge_server.py")],
+        "transport": "stdio",
+    },
 }
 
 
@@ -227,6 +232,8 @@ def _infer_server(tool_name: str) -> str:
         "check_approval_status": "it",
         "submit_it_ticket": "it",
         "get_it_tickets": "it",
+        "search_company_knowledge": "knowledge",
+        "list_knowledge_sources": "knowledge",
     }
     return mapping.get(tool_name, "unknown")
 

@@ -1,56 +1,43 @@
 """
 FastMCP server simulating Salesforce.
-Exposes tools for managing Salesforce user profiles and org settings.
+Backed by SQLite via SQLModel — profile updates persist across restarts.
 Run standalone:  python mcp_servers/salesforce_server.py
 """
 
-import copy
 import sys
 import os
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from fastmcp import FastMCP
-from mcp_servers.data_store import EMPLOYEES
+from database.engine import init_db, get_session
+from database.models import SalesforceUser
 
 mcp = FastMCP("Salesforce")
 
-_sf_users: dict[str, dict] = {
-    emp_id: {
-        "sf_user_id": f"005{emp_id.upper()}",
-        "username": f"{emp['email'].split('@')[0]}@acme.salesforce.com",
-        "first_name": emp["name"].split()[0],
-        "last_name": emp["name"].split()[-1],
-        "email": emp["email"],
-        "title": emp.get("title", ""),
-        "department": emp["department"],
-        "phone": "",
-        "mobile_phone": "",
-        "profile": "Standard User",
-        "is_active": True,
-    }
-    for emp_id, emp in copy.deepcopy(EMPLOYEES).items()
-}
+init_db()
 
 
 @mcp.tool()
 def get_salesforce_user(employee_id: str) -> str:
     """Retrieve an employee's Salesforce user record."""
-    user = _sf_users.get(employee_id)
+    with get_session() as session:
+        user = session.get(SalesforceUser, employee_id)
+
     if not user:
         return f"ERROR: No Salesforce user found for employee '{employee_id}'."
 
+    permission_sets = json.loads(user.permission_sets)
     return (
         f"Salesforce — User Record\n"
-        f"  SF User ID: {user['sf_user_id']}\n"
-        f"  Username:   {user['username']}\n"
-        f"  Name:       {user['first_name']} {user['last_name']}\n"
-        f"  Email:      {user['email']}\n"
-        f"  Title:      {user['title'] or 'Not set'}\n"
-        f"  Department: {user['department']}\n"
-        f"  Phone:      {user['phone'] or 'Not set'}\n"
-        f"  Profile:    {user['profile']}\n"
-        f"  Active:     {user['is_active']}"
+        f"  SF User ID:      {user.sf_user_id}\n"
+        f"  Username:        {user.username}\n"
+        f"  Title:           {user.title or 'Not set'}\n"
+        f"  Department:      {user.department or 'Not set'}\n"
+        f"  Phone:           {user.phone or 'Not set'}\n"
+        f"  Profile:         {user.profile}\n"
+        f"  Permission Sets: {', '.join(permission_sets) if permission_sets else 'None'}"
     )
 
 
@@ -66,29 +53,34 @@ def update_salesforce_profile(
     Update an employee's Salesforce user profile fields.
     Only non-empty arguments will be applied.
     """
-    user = _sf_users.get(employee_id)
-    if not user:
-        return f"ERROR: No Salesforce user found for employee '{employee_id}'."
+    with get_session() as session:
+        user = session.get(SalesforceUser, employee_id)
+        if not user:
+            return f"ERROR: No Salesforce user found for employee '{employee_id}'."
 
-    updated: list[str] = []
-    if title:
-        user["title"] = title
-        updated.append(f"title → {title}")
-    if department:
-        user["department"] = department
-        updated.append(f"department → {department}")
-    if phone:
-        user["phone"] = phone
-        updated.append(f"phone → {phone}")
-    if mobile_phone:
-        user["mobile_phone"] = mobile_phone
-        updated.append(f"mobile_phone → {mobile_phone}")
+        updated: list[str] = []
+        if title:
+            user.title = title
+            updated.append(f"title → {title}")
+        if department:
+            user.department = department
+            updated.append(f"department → {department}")
+        if phone:
+            user.phone = phone
+            updated.append(f"phone → {phone}")
+        if mobile_phone:
+            user.mobile_phone = mobile_phone
+            updated.append(f"mobile_phone → {mobile_phone}")
 
-    if not updated:
-        return "No Salesforce profile fields provided to update."
+        if not updated:
+            return "No Salesforce profile fields provided to update."
+
+        session.add(user)
+        session.commit()
+        username = user.username
 
     return (
-        f"Salesforce — User record updated for {user['first_name']} {user['last_name']}.\n"
+        f"Salesforce — User record updated for {username}.\n"
         f"Updated: {', '.join(updated)}"
     )
 
@@ -96,21 +88,26 @@ def update_salesforce_profile(
 @mcp.tool()
 def assign_salesforce_permission_set(employee_id: str, permission_set: str) -> str:
     """
-    Assign a Salesforce permission set to an employee (e.g. 'Sales_Standard', 'Marketing_Analytics').
+    Assign a Salesforce permission set to an employee
+    (e.g. 'Sales_Standard', 'Marketing_Analytics').
     """
-    user = _sf_users.get(employee_id)
-    if not user:
-        return f"ERROR: No Salesforce user found for employee '{employee_id}'."
+    with get_session() as session:
+        user = session.get(SalesforceUser, employee_id)
+        if not user:
+            return f"ERROR: No Salesforce user found for employee '{employee_id}'."
 
-    existing = user.get("permission_sets", [])
-    if permission_set in existing:
-        return f"Salesforce — '{permission_set}' is already assigned to {user['first_name']} {user['last_name']}."
+        existing = json.loads(user.permission_sets)
+        if permission_set in existing:
+            return f"Salesforce — '{permission_set}' is already assigned to {user.username}."
 
-    existing.append(permission_set)
-    user["permission_sets"] = existing
+        existing.append(permission_set)
+        user.permission_sets = json.dumps(existing)
+        session.add(user)
+        session.commit()
+        username = user.username
+
     return (
-        f"Salesforce — Permission set '{permission_set}' assigned to "
-        f"{user['first_name']} {user['last_name']}.\n"
+        f"Salesforce — Permission set '{permission_set}' assigned to {username}.\n"
         f"All permission sets: {', '.join(existing)}"
     )
 

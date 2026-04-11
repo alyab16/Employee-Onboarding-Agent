@@ -1,38 +1,41 @@
 """
-FastMCP server simulating a corporate Training Platform (e.g. Workday Learning / Cornerstone).
-Exposes tools for tracking and completing onboarding training modules.
+FastMCP server simulating a corporate Training Platform.
+Backed by SQLite via SQLModel — completions persist across restarts.
 Run standalone:  python mcp_servers/training_server.py
 """
 
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from fastmcp import FastMCP
-from mcp_servers.data_store import TRAINING_MODULES
+from sqlmodel import select
+from database.engine import init_db, get_session
+from database.models import TrainingModule, TrainingCompletion
 
 mcp = FastMCP("Training Platform")
 
-# In-process state: employee_id → { module_id → completion record }
-_completions: dict[str, dict[str, dict]] = {}
+init_db()
 
-
-def _get_or_init(employee_id: str) -> dict[str, dict]:
-    if employee_id not in _completions:
-        _completions[employee_id] = {}
-    return _completions[employee_id]
+_MODULE_ORDER = ["T1", "T2", "T3", "T4"]
 
 
 @mcp.tool()
 def get_training_catalog() -> str:
     """Return all available onboarding training modules with descriptions and durations."""
+    with get_session() as session:
+        modules = session.exec(select(TrainingModule)).all()
+
+    if not modules:
+        return "No training modules found."
+
     lines = ["Training Platform — Onboarding Catalog\n"]
-    for mod in TRAINING_MODULES.values():
+    for mod in sorted(modules, key=lambda m: m.id):
         lines.append(
-            f"  [{mod['id']}] {mod['name']} ({mod['duration_minutes']} min)\n"
-            f"       {mod['description']}"
+            f"  [{mod.id}] {mod.name} ({mod.duration_minutes} min)\n"
+            f"       {mod.description}"
         )
     return "\n".join(lines)
 
@@ -43,19 +46,35 @@ def get_training_status(employee_id: str) -> str:
     Get the current training completion status for an employee.
     Shows which modules are complete and which are still pending.
     """
-    completions = _get_or_init(employee_id)
-    lines = [f"Training Platform — Status for employee {employee_id}\n"]
+    with get_session() as session:
+        modules = {m.id: m for m in session.exec(select(TrainingModule)).all()}
+        completions = {
+            c.module_id: c
+            for c in session.exec(
+                select(TrainingCompletion).where(
+                    TrainingCompletion.employee_id == employee_id
+                )
+            ).all()
+        }
 
+    lines = [f"Training Platform — Status for {employee_id}\n"]
     all_complete = True
-    for mod_id, mod in TRAINING_MODULES.items():
+    for mod_id in _MODULE_ORDER:
+        mod = modules.get(mod_id)
+        if not mod:
+            continue
         record = completions.get(mod_id)
         if record:
-            lines.append(f"  [{mod_id}] ✓ {mod['name']} — completed {record['completed_at']}")
+            lines.append(f"  [{mod_id}] ✓ {mod.name} — completed {record.completed_at}")
         else:
-            lines.append(f"  [{mod_id}] ○ {mod['name']} — not started")
+            lines.append(f"  [{mod_id}] ○ {mod.name} — not started")
             all_complete = False
 
-    summary = "All modules complete! 🎉" if all_complete else "Modules remaining — please complete in order (T1 → T4)."
+    summary = (
+        "All modules complete! 🎉"
+        if all_complete
+        else "Modules remaining — complete in order (T1 → T4)."
+    )
     lines.append(f"\nSummary: {summary}")
     return "\n".join(lines)
 
@@ -64,45 +83,65 @@ def get_training_status(employee_id: str) -> str:
 def complete_training_module(employee_id: str, module_id: str) -> str:
     """
     Mark a training module as completed for an employee.
-    Modules should be completed in order: T1 → T2 → T3 → T4.
+    Modules must be completed in order: T1 → T2 → T3 → T4.
     Valid module IDs: T1, T2, T3, T4.
     """
     module_id = module_id.upper()
-    if module_id not in TRAINING_MODULES:
-        valid = ", ".join(TRAINING_MODULES.keys())
-        return f"ERROR: Unknown module '{module_id}'. Valid IDs: {valid}"
 
-    completions = _get_or_init(employee_id)
+    with get_session() as session:
+        mod = session.get(TrainingModule, module_id)
+        if not mod:
+            valid = ", ".join(_MODULE_ORDER)
+            return f"ERROR: Unknown module '{module_id}'. Valid IDs: {valid}"
 
-    if module_id in completions:
-        return (
-            f"Training Platform — Module {module_id} was already completed on "
-            f"{completions[module_id]['completed_at']}."
-        )
-
-    # Enforce ordering: T1 before T2, T2 before T3, T3 before T4
-    order = ["T1", "T2", "T3", "T4"]
-    idx = order.index(module_id)
-    for prerequisite in order[:idx]:
-        if prerequisite not in completions:
+        # Check if already complete
+        existing = session.exec(
+            select(TrainingCompletion).where(
+                TrainingCompletion.employee_id == employee_id,
+                TrainingCompletion.module_id == module_id,
+            )
+        ).first()
+        if existing:
             return (
-                f"ERROR: You must complete {prerequisite} before {module_id}. "
-                f"Please complete modules in order."
+                f"Training Platform — Module {module_id} was already completed "
+                f"on {existing.completed_at}."
             )
 
-    mod = TRAINING_MODULES[module_id]
-    completions[module_id] = {
-        "module_id": module_id,
-        "module_name": mod["name"],
-        "completed_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-    }
+        # Enforce ordering
+        idx = _MODULE_ORDER.index(module_id)
+        for prereq in _MODULE_ORDER[:idx]:
+            done = session.exec(
+                select(TrainingCompletion).where(
+                    TrainingCompletion.employee_id == employee_id,
+                    TrainingCompletion.module_id == prereq,
+                )
+            ).first()
+            if not done:
+                return (
+                    f"ERROR: Complete {prereq} before {module_id}. "
+                    f"Modules must be done in order."
+                )
 
-    completed_count = len(completions)
-    total = len(TRAINING_MODULES)
+        # Record completion
+        session.add(TrainingCompletion(
+            employee_id=employee_id,
+            module_id=module_id,
+            completed_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        ))
+        session.commit()
+
+        total_done = session.exec(
+            select(TrainingCompletion).where(
+                TrainingCompletion.employee_id == employee_id
+            )
+        ).all()
+
+    count = len(total_done)
+    total = len(_MODULE_ORDER)
     return (
-        f"Training Platform — ✓ '{mod['name']}' completed successfully!\n"
-        f"Progress: {completed_count}/{total} modules done."
-        + ("\n🎉 All training modules complete!" if completed_count == total else "")
+        f"Training Platform — ✓ '{mod.name}' completed!\n"
+        f"Progress: {count}/{total} modules done."
+        + ("\n🎉 All training modules complete!" if count == total else "")
     )
 
 

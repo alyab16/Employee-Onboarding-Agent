@@ -75,6 +75,7 @@ export const SERVER_COLORS: Record<string, { bg: string; text: string; dot: stri
   salesforce: { bg: "bg-sky-50", text: "text-sky-600", dot: "bg-sky-400" },
   training:   { bg: "bg-lime-50", text: "text-lime-600", dot: "bg-lime-500" },
   it:         { bg: "bg-teal-50", text: "text-teal-600", dot: "bg-teal-400" },
+  knowledge:  { bg: "bg-violet-50", text: "text-violet-600", dot: "bg-violet-400" },
   unknown:    { bg: "bg-stone-50", text: "text-stone-500", dot: "bg-stone-400" },
 };
 
@@ -84,5 +85,6 @@ export const SERVER_LABELS: Record<string, string> = {
   salesforce: "Salesforce",
   training: "Training Platform",
   it: "IT Ticketing",
+  knowledge: "Knowledge Base",
   unknown: "Unknown",
 };
