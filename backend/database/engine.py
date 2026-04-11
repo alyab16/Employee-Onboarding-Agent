@@ -21,4 +21,4 @@ def init_db():
 
 def get_session() -> Session:
     """Return a new session. Caller is responsible for closing it."""
-    return Session(_engine)
+    return Session(_engine, expire_on_commit=False)

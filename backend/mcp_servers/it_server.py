@@ -42,25 +42,25 @@ def get_access_recommendations(employee_id: str) -> str:
             )
         ).first()
 
-    if not rec:
-        return (
-            f"No access recommendations found for role='{emp.role}' "
-            f"level='{emp.level}'. Contact IT for a manual assessment."
+        if not rec:
+            return (
+                f"No access recommendations found for role='{emp.role}' "
+                f"level='{emp.level}'. Contact IT for a manual assessment."
+            )
+
+        systems: list[str] = json.loads(rec.systems)
+        lines = [
+            f"IT — Access Recommendations for {emp.name} ({emp.role} {emp.level})\n",
+            f"Based on Acme Corp's access matrix, the following systems are recommended:\n",
+        ]
+        for i, sys_name in enumerate(systems, 1):
+            lines.append(f"  {i:2}. {sys_name}")
+
+        lines.append(
+            f"\nTotal: {len(systems)} systems. Review the list and choose which ones you "
+            f"need — manager approval is required before submitting to IT."
         )
-
-    systems: list[str] = json.loads(rec.systems)
-    lines = [
-        f"IT — Access Recommendations for {emp.name} ({emp.role} {emp.level})\n",
-        f"Based on Acme Corp's access matrix, the following systems are recommended:\n",
-    ]
-    for i, sys_name in enumerate(systems, 1):
-        lines.append(f"  {i:2}. {sys_name}")
-
-    lines.append(
-        f"\nTotal: {len(systems)} systems. Review the list and choose which ones you "
-        f"need — manager approval is required before submitting to IT."
-    )
-    return "\n".join(lines)
+        return "\n".join(lines)
 
 
 @mcp.tool()
@@ -92,14 +92,14 @@ def request_manager_approval(employee_id: str, requested_systems: list[str]) -> 
         ))
         session.commit()
 
-    return (
-        f"IT — Approval request submitted.\n"
-        f"  Request ID: {request_id}\n"
-        f"  Manager:    {emp.manager} <{emp.manager_email}>\n"
-        f"  Systems:    {', '.join(requested_systems)}\n"
-        f"  Status:     pending\n\n"
-        f"Your manager has been notified. Use check_approval_status to monitor progress."
-    )
+        return (
+            f"IT — Approval request submitted.\n"
+            f"  Request ID: {request_id}\n"
+            f"  Manager:    {emp.manager} <{emp.manager_email}>\n"
+            f"  Systems:    {', '.join(requested_systems)}\n"
+            f"  Status:     pending\n\n"
+            f"Your manager has been notified. Use check_approval_status to monitor progress."
+        )
 
 
 @mcp.tool()
@@ -204,15 +204,15 @@ def submit_it_ticket(employee_id: str, systems: list[str]) -> str:
         ))
         session.commit()
 
-    return (
-        f"IT — Ticket Created! 🎉\n"
-        f"  Ticket ID:       {ticket_id}\n"
-        f"  Systems:         {', '.join(systems)}\n"
-        f"  Status:          open\n"
-        f"  Est. Completion: {estimated}\n\n"
-        f"The IT team will provision your access within 2 business days. "
-        f"You will receive an email when each system is ready."
-    )
+        return (
+            f"IT — Ticket Created! 🎉\n"
+            f"  Ticket ID:       {ticket_id}\n"
+            f"  Systems:         {', '.join(systems)}\n"
+            f"  Status:          open\n"
+            f"  Est. Completion: {estimated}\n\n"
+            f"The IT team will provision your access within 2 business days. "
+            f"You will receive an email when each system is ready."
+        )
 
 
 @mcp.tool()
@@ -223,17 +223,17 @@ def get_it_tickets(employee_id: str) -> str:
             select(ITTicket).where(ITTicket.employee_id == employee_id)
         ).all()
 
-    if not tickets:
-        return f"No IT tickets found for employee '{employee_id}'."
+        if not tickets:
+            return f"No IT tickets found for employee '{employee_id}'."
 
-    lines = [f"IT — Tickets for {employee_id}\n"]
-    for t in tickets:
-        systems = json.loads(t.systems)
-        lines.append(
-            f"  [{t.ticket_id}] {t.status.upper()} — "
-            f"{', '.join(systems)} (est. {t.estimated_completion})"
-        )
-    return "\n".join(lines)
+        lines = [f"IT — Tickets for {employee_id}\n"]
+        for t in tickets:
+            systems = json.loads(t.systems)
+            lines.append(
+                f"  [{t.ticket_id}] {t.status.upper()} — "
+                f"{', '.join(systems)} (est. {t.estimated_completion})"
+            )
+        return "\n".join(lines)
 
 
 if __name__ == "__main__":

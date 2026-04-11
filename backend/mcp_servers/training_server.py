@@ -28,16 +28,16 @@ def get_training_catalog() -> str:
     with get_session() as session:
         modules = session.exec(select(TrainingModule)).all()
 
-    if not modules:
-        return "No training modules found."
+        if not modules:
+            return "No training modules found."
 
-    lines = ["Training Platform — Onboarding Catalog\n"]
-    for mod in sorted(modules, key=lambda m: m.id):
-        lines.append(
-            f"  [{mod.id}] {mod.name} ({mod.duration_minutes} min)\n"
-            f"       {mod.description}"
-        )
-    return "\n".join(lines)
+        lines = ["Training Platform — Onboarding Catalog\n"]
+        for mod in sorted(modules, key=lambda m: m.id):
+            lines.append(
+                f"  [{mod.id}] {mod.name} ({mod.duration_minutes} min)\n"
+                f"       {mod.description}"
+            )
+        return "\n".join(lines)
 
 
 @mcp.tool()
@@ -57,26 +57,26 @@ def get_training_status(employee_id: str) -> str:
             ).all()
         }
 
-    lines = [f"Training Platform — Status for {employee_id}\n"]
-    all_complete = True
-    for mod_id in _MODULE_ORDER:
-        mod = modules.get(mod_id)
-        if not mod:
-            continue
-        record = completions.get(mod_id)
-        if record:
-            lines.append(f"  [{mod_id}] ✓ {mod.name} — completed {record.completed_at}")
-        else:
-            lines.append(f"  [{mod_id}] ○ {mod.name} — not started")
-            all_complete = False
+        lines = [f"Training Platform — Status for {employee_id}\n"]
+        all_complete = True
+        for mod_id in _MODULE_ORDER:
+            mod = modules.get(mod_id)
+            if not mod:
+                continue
+            record = completions.get(mod_id)
+            if record:
+                lines.append(f"  [{mod_id}] ✓ {mod.name} — completed {record.completed_at}")
+            else:
+                lines.append(f"  [{mod_id}] ○ {mod.name} — not started")
+                all_complete = False
 
-    summary = (
-        "All modules complete! 🎉"
-        if all_complete
-        else "Modules remaining — complete in order (T1 → T4)."
-    )
-    lines.append(f"\nSummary: {summary}")
-    return "\n".join(lines)
+        summary = (
+            "All modules complete! 🎉"
+            if all_complete
+            else "Modules remaining — complete in order (T1 → T4)."
+        )
+        lines.append(f"\nSummary: {summary}")
+        return "\n".join(lines)
 
 
 @mcp.tool()
@@ -136,13 +136,13 @@ def complete_training_module(employee_id: str, module_id: str) -> str:
             )
         ).all()
 
-    count = len(total_done)
-    total = len(_MODULE_ORDER)
-    return (
-        f"Training Platform — ✓ '{mod.name}' completed!\n"
-        f"Progress: {count}/{total} modules done."
-        + ("\n🎉 All training modules complete!" if count == total else "")
-    )
+        count = len(total_done)
+        total = len(_MODULE_ORDER)
+        return (
+            f"Training Platform — ✓ '{mod.name}' completed!\n"
+            f"Progress: {count}/{total} modules done."
+            + ("\n🎉 All training modules complete!" if count == total else "")
+        )
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Message, ToolActivity } from "../types";
 import { SERVER_COLORS, SERVER_LABELS } from "../types";
 
@@ -78,6 +80,95 @@ function ToolActivityCard({ activity }: { activity: ToolActivity }) {
   );
 }
 
+/** Markdown renderer with Tailwind prose styles, sized to fit chat bubbles. */
+function MarkdownContent({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
+  return (
+    <div className="text-[13px] leading-relaxed text-stone-700">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => (
+            <p className="mb-2 last:mb-0">{children}</p>
+          ),
+          strong: ({ children }) => (
+            <strong className="font-semibold text-stone-900">{children}</strong>
+          ),
+          em: ({ children }) => (
+            <em className="italic text-stone-600">{children}</em>
+          ),
+          h1: ({ children }) => (
+            <h1 className="text-base font-bold text-stone-900 mb-2 mt-3 first:mt-0">{children}</h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="text-sm font-bold text-stone-900 mb-1.5 mt-3 first:mt-0">{children}</h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="text-[13px] font-semibold text-stone-800 mb-1 mt-2 first:mt-0">{children}</h3>
+          ),
+          ul: ({ children }) => (
+            <ul className="mb-2 last:mb-0 space-y-0.5 pl-4">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="mb-2 last:mb-0 space-y-0.5 pl-4 list-decimal">{children}</ol>
+          ),
+          li: ({ children }) => (
+            <li className="relative pl-1 before:content-['•'] before:absolute before:-left-3 before:text-teal-500 before:font-bold [ol_&]:before:content-none [ol_&]:list-item">
+              {children}
+            </li>
+          ),
+          code: ({ children, className }) => {
+            const isBlock = className?.includes("language-");
+            if (isBlock) {
+              return (
+                <code className="block bg-stone-100 rounded-md px-3 py-2 text-[11px] font-mono text-stone-700 my-2 overflow-x-auto whitespace-pre">
+                  {children}
+                </code>
+              );
+            }
+            return (
+              <code className="bg-stone-100 rounded px-1 py-0.5 text-[11px] font-mono text-teal-700">
+                {children}
+              </code>
+            );
+          },
+          pre: ({ children }) => (
+            <pre className="my-2 rounded-md overflow-hidden">{children}</pre>
+          ),
+          blockquote: ({ children }) => (
+            <blockquote className="border-l-2 border-teal-400 pl-3 my-2 text-stone-500 italic">
+              {children}
+            </blockquote>
+          ),
+          hr: () => <hr className="my-3 border-stone-200" />,
+          a: ({ href, children }) => (
+            <a href={href} className="text-teal-600 underline underline-offset-2 hover:text-teal-700" target="_blank" rel="noopener noreferrer">
+              {children}
+            </a>
+          ),
+          table: ({ children }) => (
+            <div className="overflow-x-auto my-2">
+              <table className="text-[12px] border-collapse w-full">{children}</table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border border-stone-200 bg-stone-100 px-2 py-1 text-left font-semibold text-stone-700">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="border border-stone-200 px-2 py-1 text-stone-600">{children}</td>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+      {isStreaming && (
+        <span className="inline-block w-[3px] h-[13px] bg-teal-500 ml-0.5 align-middle animate-pulse rounded-full" />
+      )}
+    </div>
+  );
+}
+
 interface Props {
   message: Message;
 }
@@ -116,18 +207,18 @@ export function MessageBubble({ message }: Props) {
         {/* Message text */}
         {(displayContent || message.isStreaming) && (
           <div
-            className={`rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap
+            className={`rounded-xl px-3.5 py-2.5
               ${isUser
-                ? "bg-stone-800 text-stone-100"
-                : "bg-white text-stone-700 border border-stone-200 shadow-sm"
+                ? "bg-stone-800 text-stone-100 text-[13px] leading-relaxed"
+                : "bg-white border border-stone-200 shadow-sm"
               }`}
           >
-            {displayContent}
-            {message.isStreaming && !displayContent && (
+            {isUser ? (
+              <span>{displayContent}</span>
+            ) : displayContent ? (
+              <MarkdownContent content={displayContent} isStreaming={message.isStreaming} />
+            ) : (
               <span className="text-stone-400 text-xs">Thinking...</span>
-            )}
-            {message.isStreaming && displayContent && (
-              <span className="inline-block w-[3px] h-[14px] bg-teal-500 ml-0.5 align-middle animate-pulse rounded-full" />
             )}
           </div>
         )}

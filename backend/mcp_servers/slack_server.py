@@ -26,20 +26,20 @@ def get_slack_profile(employee_id: str) -> str:
     with get_session() as session:
         profile = session.get(SlackProfile, employee_id)
 
-    if not profile:
-        return f"ERROR: No Slack account found for employee '{employee_id}'."
+        if not profile:
+            return f"ERROR: No Slack account found for employee '{employee_id}'."
 
-    channels = json.loads(profile.channels)
-    return (
-        f"Slack — Profile for {profile.display_name}\n"
-        f"  User ID:      U{employee_id.upper()}\n"
-        f"  Display Name: {profile.display_name}\n"
-        f"  Title:        {profile.title or 'Not set'}\n"
-        f"  Phone:        {profile.phone or 'Not set'}\n"
-        f"  Location:     {profile.location or 'Not set'}\n"
-        f"  Status:       {profile.status_emoji} {profile.status_text}\n"
-        f"  Channels:     {', '.join(channels)}"
-    )
+        channels = json.loads(profile.channels)
+        return (
+            f"Slack — Profile for {profile.display_name}\n"
+            f"  User ID:      U{employee_id.upper()}\n"
+            f"  Display Name: {profile.display_name}\n"
+            f"  Title:        {profile.title or 'Not set'}\n"
+            f"  Phone:        {profile.phone or 'Not set'}\n"
+            f"  Location:     {profile.location or 'Not set'}\n"
+            f"  Status:       {profile.status_emoji} {profile.status_text}\n"
+            f"  Channels:     {', '.join(channels)}"
+        )
 
 
 @mcp.tool()
@@ -86,12 +86,11 @@ def update_slack_profile(
 
         session.add(profile)
         session.commit()
-        name = profile.display_name
 
-    return (
-        f"Slack — Profile updated successfully for {name}.\n"
-        f"Updated: {', '.join(updated)}"
-    )
+        return (
+            f"Slack — Profile updated successfully for {profile.display_name}.\n"
+            f"Updated: {', '.join(updated)}"
+        )
 
 
 @mcp.tool()
@@ -115,15 +114,14 @@ def add_to_slack_channels(employee_id: str, channels: list[str]) -> str:
         profile.channels = json.dumps(current)
         session.add(profile)
         session.commit()
-        name = profile.display_name
 
-    if not added:
-        return "Employee is already a member of all specified channels."
+        if not added:
+            return "Employee is already a member of all specified channels."
 
-    return (
-        f"Slack — {name} added to: {', '.join(added)}.\n"
-        f"All channels: {', '.join(current)}"
-    )
+        return (
+            f"Slack — {profile.display_name} added to: {', '.join(added)}.\n"
+            f"All channels: {', '.join(current)}"
+        )
 
 
 if __name__ == "__main__":

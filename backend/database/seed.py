@@ -9,13 +9,34 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from sqlmodel import select, Session
+from sqlmodel import select, Session, delete
 from database.engine import get_engine
 from database.models import (
     Employee, AccessRecommendation, TrainingModule,
-    SlackProfile, SalesforceUser,
+    SlackProfile, SalesforceUser, TrainingCompletion, ApprovalRequest, ITTicket,
 )
 from mcp_servers.data_store import EMPLOYEES, ACCESS_MATRIX, TRAINING_MODULES
+
+
+def reset_db() -> None:
+    """
+    Wipe all data and re-seed from mock data.
+    Clears transactional tables (completions, approvals, tickets) and
+    resets all profile tables back to initial seed values.
+    """
+    engine = get_engine()
+    with Session(engine) as session:
+        # Clear all tables
+        for model in (
+            TrainingCompletion, ApprovalRequest, ITTicket,
+            SlackProfile, SalesforceUser, Employee,
+            TrainingModule, AccessRecommendation,
+        ):
+            session.exec(delete(model))  # type: ignore[call-overload]
+        session.commit()
+
+    # Re-seed everything from scratch
+    seed_all()
 
 
 def seed_all() -> None:
