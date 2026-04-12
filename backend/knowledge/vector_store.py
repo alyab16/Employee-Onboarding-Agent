@@ -1,12 +1,22 @@
 """
-ChromaDB vector store builder.
+ChromaDB vector store builder with production RAG patterns.
+
+Improvements over naive chunking:
+  1. Cosine similarity  — industry standard for text; ignores vector magnitude.
+  2. Contextual chunking — each chunk is prefixed with its document title and
+     section header so it remains meaningful in isolation.
+  3. Hybrid search       — BM25 keyword retrieval + vector semantic retrieval
+     merged via Reciprocal Rank Fusion (EnsembleRetriever).
+
 Called once at application startup — rebuilds only when knowledge_docs change
 OR the embedding provider changes (OpenAI ↔ Ollama).
 """
 
 import os
+import re
 import hashlib
 import shutil
+import pickle
 from pathlib import Path
 
 from langchain_core.documents import Document
@@ -19,6 +29,10 @@ logger = get_logger("vector_store")
 DOCS_PATH = Path(__file__).parent.parent / "knowledge_docs"
 CHROMA_PATH = Path(__file__).parent.parent / "chroma_db"
 HASH_FILE = CHROMA_PATH / ".docs_hash"
+BM25_DOCS_FILE = CHROMA_PATH / ".bm25_docs.pkl"
+
+# Collection-level config: cosine distance instead of L2
+COLLECTION_METADATA = {"hnsw:space": "cosine"}
 
 
 def _current_provider() -> str:
@@ -59,8 +73,72 @@ def _needs_rebuild() -> bool:
         return True
     if not HASH_FILE.exists():
         return True
+    if not BM25_DOCS_FILE.exists():
+        return True
     return HASH_FILE.read_text().strip() != _build_hash()
 
+
+# ---------------------------------------------------------------------------
+# Contextual chunking
+# ---------------------------------------------------------------------------
+
+def _extract_section_header(text: str) -> str:
+    """Return the last markdown ## or ### heading found in text, or empty string."""
+    headings = re.findall(r"^#{2,3}\s+(.+)$", text, re.MULTILINE)
+    return headings[-1] if headings else ""
+
+
+def _contextual_chunk(raw_docs: list[Document]) -> list[Document]:
+    """
+    Split documents into chunks, then prepend document title and section header
+    to each chunk.  This gives the embedding model (and the LLM reading results)
+    the context needed to understand a chunk in isolation.
+
+    Example output for a chunk:
+        Document: Acme Corp Code of Conduct
+        Section: Anti-Harassment Policy
+
+        Acme Corp has zero tolerance for harassment of any kind...
+    """
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=600,
+        chunk_overlap=80,
+        separators=["\n## ", "\n### ", "\n\n", "\n", " "],
+    )
+
+    contextual_chunks: list[Document] = []
+
+    for doc in raw_docs:
+        # Extract the document title from the first # heading
+        title_match = re.match(r"^#\s+(.+)$", doc.page_content, re.MULTILINE)
+        doc_title = title_match.group(1) if title_match else doc.metadata.get("source", "Unknown")
+
+        chunks = splitter.split_documents([doc])
+
+        for chunk in chunks:
+            section = _extract_section_header(chunk.page_content)
+
+            # Build contextual prefix
+            prefix_parts = [f"Document: {doc_title}"]
+            if section:
+                prefix_parts.append(f"Section: {section}")
+            prefix = "\n".join(prefix_parts) + "\n\n"
+
+            contextual_chunks.append(Document(
+                page_content=prefix + chunk.page_content,
+                metadata={
+                    **chunk.metadata,
+                    "doc_title": doc_title,
+                    "section": section,
+                },
+            ))
+
+    return contextual_chunks
+
+
+# ---------------------------------------------------------------------------
+# Build & init
+# ---------------------------------------------------------------------------
 
 def init_vector_store() -> None:
     """
@@ -92,40 +170,53 @@ def init_vector_store() -> None:
         ))
     logger.info("vector_store.loaded", doc_count=len(raw_docs))
 
-    # Chunk documents
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=600,
-        chunk_overlap=80,
-        separators=["\n## ", "\n### ", "\n\n", "\n", " "],
-    )
-    chunks = splitter.split_documents(raw_docs)
-    logger.info("vector_store.chunked", chunk_count=len(chunks))
+    # Contextual chunking — prepend doc title + section header to each chunk
+    chunks = _contextual_chunk(raw_docs)
+    logger.info("vector_store.chunked", chunk_count=len(chunks), strategy="contextual")
 
-    # Build and persist
+    # Build vector store with cosine similarity
     embeddings = _get_embeddings()
     Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
         persist_directory=str(CHROMA_PATH),
         collection_name="company_knowledge",
+        collection_metadata=COLLECTION_METADATA,
     )
+
+    # Persist chunks for BM25 keyword retriever (pickle alongside chroma)
+    with open(BM25_DOCS_FILE, "wb") as f:
+        pickle.dump(chunks, f)
+    logger.info("vector_store.bm25_docs_saved", chunk_count=len(chunks))
 
     # Save hash to skip rebuild next time
     HASH_FILE.write_text(_build_hash())
-    logger.info("vector_store.ready", chunks=len(chunks), provider=_current_provider())
+    logger.info("vector_store.ready", chunks=len(chunks), provider=_current_provider(),
+                distance="cosine", hybrid="bm25+vector")
 
 
-def get_vectorstore():
+# ---------------------------------------------------------------------------
+# Query-time accessors
+# ---------------------------------------------------------------------------
+
+def get_vectorstore() -> Chroma:
     """
     Return a Chroma instance for querying the knowledge base.
-    Called by the in-process knowledge tools (not MCP subprocess).
+    Called by the in-process knowledge tools.
     """
     embeddings = _get_embeddings()
     return Chroma(
         persist_directory=str(CHROMA_PATH),
         embedding_function=embeddings,
         collection_name="company_knowledge",
+        collection_metadata=COLLECTION_METADATA,
     )
+
+
+def get_bm25_docs() -> list[Document]:
+    """Load the persisted chunk documents used by the BM25 retriever."""
+    with open(BM25_DOCS_FILE, "rb") as f:
+        return pickle.load(f)
 
 
 def _infer_category(stem: str) -> str:

@@ -107,7 +107,7 @@ async def search_company_knowledge(query: str, category: str = "all") -> str:
     lines = [f"Knowledge Base — Results for: \"{query}\"\n"]
     for i, (doc, score) in enumerate(results, 1):
         source = doc.metadata.get("source", "unknown").replace("_", " ").title()
-        relevance = round((1 - score) * 100, 1)  # cosine distance → relevance %
+        relevance = round(max(0, 1 / (1 + score)) * 100, 1)  # L2 distance → relevance %
         lines.append(f"[{i}] {source}  (relevance: {relevance}%)")
         lines.append(doc.page_content.strip())
         lines.append("")
