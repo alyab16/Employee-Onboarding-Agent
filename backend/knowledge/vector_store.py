@@ -1,11 +1,12 @@
 """
 ChromaDB vector store builder.
-Called once at application startup — rebuilds only when knowledge_docs change.
+Called once at application startup — rebuilds only when knowledge_docs change
+OR the embedding provider changes (OpenAI ↔ Ollama).
 """
 
 import os
 import hashlib
-import json
+import shutil
 from pathlib import Path
 
 from langchain_core.documents import Document
@@ -18,6 +19,13 @@ logger = get_logger("vector_store")
 DOCS_PATH = Path(__file__).parent.parent / "knowledge_docs"
 CHROMA_PATH = Path(__file__).parent.parent / "chroma_db"
 HASH_FILE = CHROMA_PATH / ".docs_hash"
+
+
+def _current_provider() -> str:
+    """Return a stable string identifying the current embedding provider + model."""
+    if os.getenv("OPENAI_API_KEY"):
+        return "openai:text-embedding-3-small"
+    return f"ollama:{os.getenv('OLLAMA_EMBED_MODEL', 'nomic-embed-text')}"
 
 
 def _get_embeddings():
@@ -34,9 +42,13 @@ def _get_embeddings():
         return OllamaEmbeddings(model=embed_model, base_url=ollama_base)
 
 
-def _docs_hash() -> str:
-    """Stable hash of all document file contents — used to detect changes."""
+def _build_hash() -> str:
+    """
+    Hash of document contents + embedding provider.
+    Changing either the docs or the provider triggers a full rebuild.
+    """
     h = hashlib.sha256()
+    h.update(_current_provider().encode())
     for f in sorted(DOCS_PATH.glob("*.md")):
         h.update(f.read_bytes())
     return h.hexdigest()
@@ -47,19 +59,23 @@ def _needs_rebuild() -> bool:
         return True
     if not HASH_FILE.exists():
         return True
-    return HASH_FILE.read_text().strip() != _docs_hash()
+    return HASH_FILE.read_text().strip() != _build_hash()
 
 
 def init_vector_store() -> None:
     """
     Index all markdown documents in knowledge_docs/ into ChromaDB.
-    Skips rebuild if documents haven't changed since last run.
+    Skips rebuild if documents AND embedding provider are unchanged.
     """
     if not _needs_rebuild():
-        logger.info("vector_store.skip_rebuild", reason="docs unchanged")
+        logger.info("vector_store.skip_rebuild", reason="docs and provider unchanged")
         return
 
-    logger.info("vector_store.building", docs_path=str(DOCS_PATH))
+    logger.info("vector_store.building", docs_path=str(DOCS_PATH), provider=_current_provider())
+
+    # Wipe stale data to avoid dimension mismatches
+    if CHROMA_PATH.exists():
+        shutil.rmtree(CHROMA_PATH)
     CHROMA_PATH.mkdir(parents=True, exist_ok=True)
 
     # Load and tag each document with metadata
@@ -95,8 +111,8 @@ def init_vector_store() -> None:
     )
 
     # Save hash to skip rebuild next time
-    HASH_FILE.write_text(_docs_hash())
-    logger.info("vector_store.ready", chunks=len(chunks))
+    HASH_FILE.write_text(_build_hash())
+    logger.info("vector_store.ready", chunks=len(chunks), provider=_current_provider())
 
 
 def get_vectorstore():
