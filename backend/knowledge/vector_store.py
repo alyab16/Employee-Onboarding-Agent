@@ -99,6 +99,19 @@ def init_vector_store() -> None:
     logger.info("vector_store.ready", chunks=len(chunks))
 
 
+def get_vectorstore():
+    """
+    Return a Chroma instance for querying the knowledge base.
+    Called by the in-process knowledge tools (not MCP subprocess).
+    """
+    embeddings = _get_embeddings()
+    return Chroma(
+        persist_directory=str(CHROMA_PATH),
+        embedding_function=embeddings,
+        collection_name="company_knowledge",
+    )
+
+
 def _infer_category(stem: str) -> str:
     mapping = {
         "hr_policy": "hr",

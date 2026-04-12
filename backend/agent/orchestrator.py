@@ -20,6 +20,7 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
 from agent.prompts import SYSTEM_PROMPT
+from agent.knowledge_tools import search_company_knowledge, list_knowledge_sources
 from utils.logger import get_logger
 
 
@@ -83,12 +84,11 @@ MCP_SERVERS_CONFIG = {
         "args": [str(_SERVERS_DIR / "it_server.py")],
         "transport": "stdio",
     },
-    "knowledge": {
-        "command": "python",
-        "args": [str(_SERVERS_DIR / "knowledge_server.py")],
-        "transport": "stdio",
-    },
 }
+
+# Knowledge tools run in-process (not MCP) because ChromaDB's SQLite
+# backend has cross-process file-locking issues on Windows.
+KNOWLEDGE_TOOLS = [search_company_knowledge, list_knowledge_sources]
 
 
 class OnboardingOrchestrator:
@@ -257,14 +257,19 @@ async def create_orchestrator() -> AsyncIterator[OnboardingOrchestrator]:
     logger.info("orchestrator.mcp.starting", servers=list(MCP_SERVERS_CONFIG.keys()))
 
     mcp_client = MultiServerMCPClient(MCP_SERVERS_CONFIG)
-    tools = await mcp_client.get_tools()
-    logger.info("orchestrator.mcp.tools_loaded", count=len(tools))
+    mcp_tools = await mcp_client.get_tools()
+    logger.info("orchestrator.mcp.tools_loaded", count=len(mcp_tools))
+
+    # Merge MCP tools (external SaaS) with in-process knowledge tools (ChromaDB RAG)
+    all_tools = mcp_tools + KNOWLEDGE_TOOLS
+    logger.info("orchestrator.all_tools", count=len(all_tools),
+                mcp=len(mcp_tools), knowledge=len(KNOWLEDGE_TOOLS))
 
     agent = create_react_agent(
         model=llm,
-        tools=tools,
+        tools=all_tools,
         checkpointer=checkpointer,
         prompt=SYSTEM_PROMPT,
     )
 
-    yield OnboardingOrchestrator(agent=agent, mcp_client=mcp_client, tools=tools)
+    yield OnboardingOrchestrator(agent=agent, mcp_client=mcp_client, tools=all_tools)

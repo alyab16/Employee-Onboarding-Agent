@@ -1,73 +1,28 @@
 """
-FastMCP server providing RAG-powered search over Acme Corp's internal knowledge base.
-Uses ChromaDB (pre-built by main.py at startup) for semantic retrieval.
-Run standalone:  python mcp_servers/knowledge_server.py
+LangChain tools for RAG-powered search over the company knowledge base.
 
-NOTE: Tools are async — this avoids the httpx/ProactorEventLoop deadlock that occurs
-when OpenAIEmbeddings makes blocking HTTP calls from a thread executor inside FastMCP.
+These run in the main FastAPI process (not an MCP subprocess) because ChromaDB
+uses SQLite under the hood and Windows file locking makes cross-process access
+unreliable.  The other five MCP servers simulate external SaaS APIs over stdio;
+the knowledge base is an internal resource, so a direct tool is the right fit.
 """
 
-import os
-import sys
-import logging
-from pathlib import Path
+from langchain_core.tools import tool
+from knowledge.vector_store import get_vectorstore
 
-# Suppress ChromaDB telemetry before any chromadb import.
-# Any stray stdout output corrupts the MCP stdio JSON-RPC protocol.
-os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
-os.environ.setdefault("CHROMA_TELEMETRY", "False")
-
-logging.getLogger("chromadb").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("openai").setLevel(logging.WARNING)
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
-from dotenv import load_dotenv
-load_dotenv()
-
-from fastmcp import FastMCP
-
-mcp = FastMCP("Knowledge Base")
-
-CHROMA_PATH = Path(__file__).parent.parent / "chroma_db"
-
-# Lazy-loaded on first tool call
-_vectorstore = None
+# Lazy singleton — created on first tool call, reused after that
+_vs = None
 
 
-def _get_vectorstore():
-    """Load the ChromaDB collection. Called once; result cached in module global."""
-    global _vectorstore
-    if _vectorstore is not None:
-        return _vectorstore
-
-    from langchain_chroma import Chroma
-
-    if os.getenv("OPENAI_API_KEY"):
-        from langchain_openai import OpenAIEmbeddings
-        embeddings = OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            timeout=30,
-            max_retries=2,
-        )
-    else:
-        from langchain_ollama import OllamaEmbeddings
-        embeddings = OllamaEmbeddings(
-            model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
-            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-        )
-
-    _vectorstore = Chroma(
-        persist_directory=str(CHROMA_PATH),
-        embedding_function=embeddings,
-        collection_name="company_knowledge",
-    )
-    return _vectorstore
+def _get_vs():
+    global _vs
+    if _vs is None:
+        _vs = get_vectorstore()
+    return _vs
 
 
-@mcp.tool()
-async def search_company_knowledge(query: str, category: str = "all") -> str:
+@tool
+def search_company_knowledge(query: str, category: str = "all") -> str:
     """
     Search Acme Corp's internal knowledge base using semantic similarity.
     Use this to answer employee questions about company policies, benefits,
@@ -82,18 +37,14 @@ async def search_company_knowledge(query: str, category: str = "all") -> str:
         search_company_knowledge("code review process", category="engineering")
         search_company_knowledge("401k matching", category="hr")
     """
-    try:
-        vs = _get_vectorstore()
-    except Exception as exc:
-        return f"Knowledge base initialization error: {exc}"
+    vs = _get_vs()
 
     where_filter = None
     if category and category != "all":
         where_filter = {"category": category}
 
     try:
-        # Use async search — avoids blocking the event loop with synchronous HTTP calls
-        results = await vs.asimilarity_search_with_score(
+        results = vs.similarity_search_with_score(
             query,
             k=4,
             filter=where_filter,
@@ -107,7 +58,7 @@ async def search_company_knowledge(query: str, category: str = "all") -> str:
     lines = [f"Knowledge Base — Results for: \"{query}\"\n"]
     for i, (doc, score) in enumerate(results, 1):
         source = doc.metadata.get("source", "unknown").replace("_", " ").title()
-        relevance = round((1 - score) * 100, 1)  # cosine distance → relevance %
+        relevance = round((1 - score) * 100, 1)
         lines.append(f"[{i}] {source}  (relevance: {relevance}%)")
         lines.append(doc.page_content.strip())
         lines.append("")
@@ -115,8 +66,8 @@ async def search_company_knowledge(query: str, category: str = "all") -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
-async def list_knowledge_sources() -> str:
+@tool
+def list_knowledge_sources() -> str:
     """
     List all available knowledge base documents and their categories.
     Use this to understand what topics are covered before searching.
@@ -139,7 +90,3 @@ async def list_knowledge_sources() -> str:
         "\nUse search_company_knowledge(query, category=...) to retrieve relevant sections."
     )
     return "\n".join(lines)
-
-
-if __name__ == "__main__":
-    mcp.run()
