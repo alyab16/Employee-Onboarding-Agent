@@ -22,6 +22,7 @@ export function ChatInterface({ employee, onLogout }: Props) {
     employee.id,
   );
   const [input, setInput] = useState("");
+  const [chatKey, setChatKey] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const hasStarted = messages.length > 0;
@@ -36,7 +37,7 @@ export function ChatInterface({ employee, onLogout }: Props) {
     greetedRef.current = true;
     sendMessage("Hello! I'm ready to start my onboarding.");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employee.id]);
+  }, [employee.id, chatKey]);
 
   const handleSend = () => {
     const text = input.trim();
@@ -78,6 +79,7 @@ export function ChatInterface({ employee, onLogout }: Props) {
             onClick={() => {
               clearHistory();
               greetedRef.current = false;
+              setChatKey((k) => k + 1);
             }}
             className="text-[11px] text-stone-400 hover:text-stone-700 px-2.5 py-1 rounded-md hover:bg-stone-100 transition-all"
           >
