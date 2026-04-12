@@ -1,26 +1,45 @@
-backend/logs/app.log
-backend/pyproject.toml
-backend/chroma_db/.docs_hash
-backend/chroma_db/chroma.sqlite3
-backend/chroma_db/a64be229-70cf-4ccf-8285-9c0243e5d280/data_level0.bin
-backend/chroma_db/a64be229-70cf-4ccf-8285-9c0243e5d280/header.bin
-backend/chroma_db/a64be229-70cf-4ccf-8285-9c0243e5d280/length.bin
-backend/chroma_db/a64be229-70cf-4ccf-8285-9c0243e5d280/link_lists.bin
-backend/pyproject.toml
-backend/uv.lock
-backend/pyproject.toml
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate.d/
+*.tfvars.secret
 
+# Lambda packages
+lambda-deployment.zip
+lambda-package/
 
+# Memory storage (contains conversation history)
+memory/
+
+# Environment files
 .env
+.env.*
+!.env.example
 
-backend/logs/app.log
-backend/chroma_db/.docs_hash
-backend/chroma_db/chroma.sqlite3
-backend/chroma_db/a64be229-70cf-4ccf-8285-9c0243e5d280/data_level0.bin
-backend/chroma_db/a64be229-70cf-4ccf-8285-9c0243e5d280/header.bin
-backend/chroma_db/a64be229-70cf-4ccf-8285-9c0243e5d280/length.bin
-backend/chroma_db/a64be229-70cf-4ccf-8285-9c0243e5d280/link_lists.bin
-uv.lock
-pyproject.toml
+# Node
+node_modules/
+out/
+.next/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# AWS
+.aws/
+
+backend/chroma_db/
 backend/pyproject.toml
 backend/uv.lock
