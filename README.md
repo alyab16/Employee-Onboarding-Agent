@@ -19,9 +19,10 @@ The **Employee Onboarding Agent** is a full-stack agentic application built as a
 
 - **Native tool calling** via a LangGraph ReAct agent with per-employee memory
 - **MCP-style extensibility** — each SaaS integration is a standalone FastMCP server; adding a new one requires zero changes to the orchestration logic
-- **RAG** over 7 internal policy and role-specific documents using ChromaDB
+- **RAG** over 7 internal policy and role-specific documents using ChromaDB, with automatic rebuild when documents or the embedding provider changes
 - **Persistent state** — all structured data backed by SQLite via SQLModel
 - **Real-time streaming** — SSE delivers agent thoughts, tool calls, and responses token-by-token to the frontend
+- **Rich markdown rendering** — agent responses rendered with full formatting (headings, lists, code blocks, tables)
 - **LangSmith tracing** — full visibility into every agent run, tool call, and token
 
 ---
@@ -42,7 +43,7 @@ flowchart TB
     User(["👤 Employee\nBrowser"]):::ui
 
     subgraph FE ["Frontend — Next.js 16 · React 19 · Tailwind CSS v4"]
-        Chat["💬 Chat Interface\nSSE Streaming"]:::ui
+        Chat["💬 Chat Interface\nSSE Streaming\nMarkdown Rendering"]:::ui
         Selector["👥 Employee\nSelector"]:::ui
     end
 
@@ -50,6 +51,7 @@ flowchart TB
         API["🔌 REST + SSE\nEndpoints"]:::api
         Orch["🧠 LangGraph\nReAct Agent"]:::agent
         Mem["💾 MemorySaver\nper-employee thread"]:::agent
+        KT["🔍 Knowledge Tools\nin-process RAG"]:::rag
     end
 
     LLM["🤖 OpenAI GPT\nor Ollama"]:::llm
@@ -62,7 +64,6 @@ flowchart TB
         SF["☁️ Salesforce"]:::mcp
         TR["📚 Training"]:::mcp
         IT["🎫 IT Ticketing"]:::mcp
-        KB["🔍 Knowledge Base"]:::mcp
     end
 
     SQLite[("🗄️ SQLite\ndata.db")]:::db
@@ -77,8 +78,9 @@ flowchart TB
     Orch <-->|"tool calls"| LLM
     Orch -.->|"traces"| LS
     Orch <-->|"MCP stdio"| MCP
+    Orch <--> KT
     HR & SL & SF & TR & IT --> SQLite
-    KB --> Chroma
+    KT --> Chroma
     Docs -.->|"indexed at startup"| Chroma
 ```
 
@@ -97,7 +99,7 @@ flowchart LR
     MSG["📨 User Message\n+ Employee ID"]:::input
     HIST["📜 Conversation\nHistory\nMemorySaver"]:::think
     LLM["🧠 LLM Reasoning\nWhat action next?"]:::think
-    TOOL["⚡ Execute MCP Tool\nvia langchain-mcp-adapters"]:::tool
+    TOOL["⚡ Execute Tool\nMCP or in-process"]:::tool
     RES["📋 Tool Result\nback to context"]:::tool
     MORE{"Stop reason\n= tool_use?"}:::check
     STREAM["💬 Stream tokens\nSSE → Frontend"]:::stream
@@ -113,7 +115,7 @@ flowchart LR
     STREAM --> DONE
 ```
 
-Each turn the agent autonomously decides which MCP tool to call, executes it, feeds the result back into context, and repeats until it has enough information to respond.
+Each turn the agent autonomously decides which tool to call, executes it, feeds the result back into context, and repeats until it has enough information to respond.
 
 ---
 
@@ -168,7 +170,13 @@ flowchart TD
 
 ---
 
-## MCP Server Ecosystem
+## Tool Architecture
+
+The agent has access to **20 tools** from two sources:
+
+### MCP Servers (5 × FastMCP subprocess, stdio transport)
+
+Each simulates an external SaaS platform. Adding a new server requires **zero changes** to the agent or orchestration logic.
 
 ```mermaid
 flowchart LR
@@ -176,7 +184,6 @@ flowchart LR
     classDef server fill:#F97316,stroke:#EA580C,color:#fff,font-weight:bold
     classDef tool fill:#FED7AA,stroke:#F97316,color:#000
     classDef db fill:#6366F1,stroke:#4F46E5,color:#fff
-    classDef rag fill:#EC4899,stroke:#DB2777,color:#fff
 
     Agent["🧠 LangGraph Agent\nMultiServerMCPClient"]:::agent
 
@@ -185,7 +192,6 @@ flowchart LR
     Agent <-->|stdio| SF
     Agent <-->|stdio| TR
     Agent <-->|stdio| IT
-    Agent <-->|stdio| KB
 
     subgraph HR ["🏛️ HR Platform"]
         direction TB
@@ -225,17 +231,28 @@ flowchart LR
         i5["get_it_tickets"]:::tool
     end
 
-    subgraph KB ["🔍 Knowledge Base"]
-        direction TB
-        k1["search_company_knowledge"]:::tool
-        k2["list_knowledge_sources"]:::tool
-    end
-
     SQLite[("🗄️ SQLite")]:::db
-    Chroma[("🔮 ChromaDB")]:::rag
-
     HR & SL & SF & TR & IT --> SQLite
-    KB --> Chroma
+```
+
+### In-Process Tools (2 × LangChain @tool, ChromaDB RAG)
+
+Knowledge search runs in the main FastAPI process to avoid cross-process ChromaDB file-locking issues on Windows.
+
+```mermaid
+flowchart LR
+    classDef agent fill:#8B5CF6,stroke:#7C3AED,color:#fff,font-weight:bold
+    classDef tool fill:#FCE7F3,stroke:#EC4899,color:#831843
+    classDef rag fill:#EC4899,stroke:#DB2777,color:#fff,font-weight:bold
+
+    Agent["🧠 LangGraph Agent"]:::agent
+    K1["search_company_knowledge\nquery + optional category filter"]:::tool
+    K2["list_knowledge_sources\n7 docs across 5 categories"]:::tool
+    Chroma[("🔮 ChromaDB\ncompany_knowledge")]:::rag
+
+    Agent --> K1
+    Agent --> K2
+    K1 --> Chroma
 ```
 
 ---
@@ -283,14 +300,15 @@ flowchart TB
 
 | Layer | Technology | Purpose |
 |---|---|---|
-| **Frontend** | Next.js 16, React 19, Tailwind CSS v4 | Chat UI, streaming SSE, employee selector |
+| **Frontend** | Next.js 16, React 19, Tailwind CSS v4, react-markdown | Chat UI, SSE streaming, markdown rendering |
 | **Backend** | FastAPI, Python 3.13, Uvicorn | REST API, SSE endpoint, app lifecycle |
 | **Agent Orchestration** | LangGraph (`create_react_agent`) | ReAct loop, per-employee conversation state |
 | **LLM** | OpenAI GPT-4o-mini / Ollama | Reasoning, tool selection, response generation |
-| **MCP Servers** | FastMCP 2.3 | 6 independent mock SaaS integrations |
+| **MCP Servers** | FastMCP 2.3 | 5 independent mock SaaS integrations (stdio) |
 | **MCP Client** | langchain-mcp-adapters | Bridges LangGraph ↔ MCP stdio protocol |
+| **Knowledge Tools** | LangChain `@tool` + ChromaDB | In-process RAG search over policy documents |
 | **Structured Data** | SQLModel + SQLite | Employees, training, approvals, tickets |
-| **Vector Store** | ChromaDB + langchain-chroma | Semantic search over policy documents |
+| **Vector Store** | ChromaDB + langchain-chroma | Semantic search with auto-rebuild on provider change |
 | **Embeddings** | OpenAI `text-embedding-3-small` / Ollama `nomic-embed-text` | Document indexing and query embedding |
 | **Logging** | structlog | Structured JSON file logs + pretty console |
 | **Tracing** | LangSmith | Full agent run visibility |
@@ -305,7 +323,7 @@ EmployeeOnboardingAgent/
 │   └── app/
 │       ├── components/
 │       │   ├── ChatInterface.tsx      # Main chat UI with SSE streaming
-│       │   ├── MessageBubble.tsx      # Message + collapsible tool activity cards
+│       │   ├── MessageBubble.tsx      # Markdown rendering + tool activity cards
 │       │   └── EmployeeSelector.tsx   # Login / employee picker
 │       ├── hooks/
 │       │   └── useChat.ts             # SSE streaming state management
@@ -318,6 +336,7 @@ EmployeeOnboardingAgent/
     │
     ├── agent/
     │   ├── orchestrator.py            # LangGraph agent + MCP client lifecycle
+    │   ├── knowledge_tools.py         # In-process RAG tools (ChromaDB search)
     │   └── prompts.py                 # System prompt
     │
     ├── mcp_servers/                   # One FastMCP server per SaaS
@@ -326,16 +345,15 @@ EmployeeOnboardingAgent/
     │   ├── slack_server.py            # Slack tools
     │   ├── salesforce_server.py       # Salesforce tools
     │   ├── training_server.py         # Training Platform tools
-    │   ├── it_server.py               # IT Ticketing + manager approval
-    │   └── knowledge_server.py        # RAG search over company knowledge
+    │   └── it_server.py               # IT Ticketing + manager approval
     │
     ├── database/
     │   ├── engine.py                  # SQLModel engine (shared SQLite file)
     │   ├── models.py                  # All table definitions
-    │   └── seed.py                    # One-time data seeding
+    │   └── seed.py                    # One-time data seeding + reset
     │
     ├── knowledge/
-    │   └── vector_store.py            # ChromaDB build + hash-based rebuild detection
+    │   └── vector_store.py            # ChromaDB build + provider-aware rebuild
     │
     ├── knowledge_docs/                # Source documents for RAG
     │   ├── hr_policy.md
@@ -348,7 +366,7 @@ EmployeeOnboardingAgent/
     │
     ├── api/
     │   ├── chat.py                    # POST /api/chat (SSE), GET /api/chat/history
-    │   └── admin.py                   # GET /api/admin/employees, /api/admin/mcp-servers
+    │   └── admin.py                   # Employees list, MCP servers, DB reset
     │
     ├── utils/
     │   └── logger.py                  # structlog — console + rotating file handler
@@ -392,8 +410,8 @@ uv run uvicorn main:app --reload
 
 The first startup will:
 1. Create `data.db` and seed all tables
-2. Index the 7 knowledge docs into ChromaDB (subsequent startups skip this if docs haven't changed)
-3. Spawn 6 FastMCP subprocesses
+2. Index the 7 knowledge docs into ChromaDB (subsequent startups skip this if docs and embedding provider are unchanged)
+3. Spawn 5 FastMCP subprocesses (HR, Slack, Salesforce, Training, IT)
 4. Start the FastAPI server on `http://localhost:8000`
 
 ### 2 — Frontend
@@ -441,8 +459,9 @@ Open [http://localhost:3000](http://localhost:3000), select an employee, and sta
 |---|---|---|
 | `POST` | `/api/chat` | Send a message; returns SSE stream of agent events |
 | `GET` | `/api/chat/history?employee_id=` | Full conversation history for an employee |
-| `GET` | `/api/admin/employees` | List mock employees (used by frontend selector) |
+| `GET` | `/api/admin/employees` | List employees (used by frontend selector) |
 | `GET` | `/api/admin/mcp-servers` | List active MCP servers and their discovered tools |
+| `POST` | `/api/admin/reset-db` | Wipe all data and re-seed from mock data |
 | `GET` | `/health` | Health check |
 
 ### SSE Event Types
@@ -508,6 +527,24 @@ The agent discovers the new tools automatically on next startup — no other cha
 ## Adding Knowledge Documents
 
 Drop any `.md` file into `backend/knowledge_docs/`. The vector store automatically detects the change via content hash on the next startup and re-indexes.
+
+Switching between OpenAI and Ollama embeddings also triggers an automatic rebuild — no manual cleanup required.
+
+---
+
+## Database Reset
+
+To reset all user-entered data (profile updates, training completions, approvals, tickets) back to seed defaults:
+
+```bash
+# Via API (while backend is running)
+curl -X POST http://localhost:8000/api/admin/reset-db
+
+# Or manually
+rm backend/data.db    # re-created on next startup
+```
+
+Conversation history (LangGraph MemorySaver) is in-memory only and resets on every backend restart.
 
 ---
 
