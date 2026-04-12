@@ -43,3 +43,4 @@ Thumbs.db
 backend/chroma_db/
 backend/pyproject.toml
 backend/uv.lock
+backend/data.db
