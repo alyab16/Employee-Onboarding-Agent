@@ -397,8 +397,11 @@ cd backend
 cp .env.example .env
 # Edit .env: add OPENAI_API_KEY or configure Ollama settings
 
+# Initialize Virtual Environment
+uv init
+
 # Install dependencies
-uv pip install -r requirements.txt
+uv add -r requirements.txt
 
 # If using Ollama — pull required models
 ollama pull llama3.1:8b        # chat model
