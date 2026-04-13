@@ -19,7 +19,7 @@ The **Employee Onboarding Agent** is a full-stack agentic application built as a
 
 - **Native tool calling** via a LangGraph ReAct agent with per-employee memory
 - **MCP-style extensibility** — each SaaS integration is a standalone FastMCP server; adding a new one requires zero changes to the orchestration logic
-- **RAG** over 7 internal policy and role-specific documents using ChromaDB, with automatic rebuild when documents or the embedding provider changes
+- **Production RAG** over 7 internal policy documents — hybrid BM25 keyword + vector semantic search merged via Reciprocal Rank Fusion, contextual chunking (each chunk prefixed with document title and section header), and cosine similarity (HNSW). Automatic rebuild when documents or the embedding provider changes
 - **Persistent state** — all structured data backed by SQLite via SQLModel
 - **Real-time streaming** — SSE delivers agent thoughts, tool calls, and responses token-by-token to the frontend
 - **Rich markdown rendering** — agent responses rendered with full formatting (headings, lists, code blocks, tables)
@@ -290,7 +290,7 @@ flowchart TB
             D6["sales_guide.md"]:::chunk
             D7["marketing_guide.md"]:::chunk
         end
-        D1 & D2 & D3 & D4 & D5 & D6 & D7 -->|"chunk 600 chars\noverlap 80"| COL
+        D1 & D2 & D3 & D4 & D5 & D6 & D7 -->|"contextual chunking\n600 chars · overlap 80\ncosine / HNSW"| COL
     end
 ```
 
@@ -306,7 +306,7 @@ flowchart TB
 | **LLM** | OpenAI GPT-4o-mini / Ollama | Reasoning, tool selection, response generation |
 | **MCP Servers** | FastMCP 2.3 | 5 independent mock SaaS integrations (stdio) |
 | **MCP Client** | langchain-mcp-adapters | Bridges LangGraph ↔ MCP stdio protocol |
-| **Knowledge Tools** | LangChain `@tool` + ChromaDB | In-process RAG search over policy documents |
+| **Knowledge Tools** | LangChain `@tool` + ChromaDB + rank-bm25 | In-process hybrid RAG: BM25 keyword + vector semantic search via Reciprocal Rank Fusion, contextual chunking, cosine similarity |
 | **Structured Data** | SQLModel + SQLite | Employees, training, approvals, tickets |
 | **Vector Store** | ChromaDB + langchain-chroma | Semantic search with auto-rebuild on provider change |
 | **Embeddings** | OpenAI `text-embedding-3-small` / Ollama `nomic-embed-text` | Document indexing and query embedding |
