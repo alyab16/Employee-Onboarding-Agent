@@ -12,6 +12,8 @@ from sqlmodel import select
 from database.engine import get_session
 from database.models import Employee
 from database.seed import reset_db
+from agent.orchestrator import TOOL_TO_SERVER
+from agent.specialists import SPECIALIST_TOOL_SCOPES, SPECIALIST_LABELS
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -47,7 +49,7 @@ async def list_mcp_servers(request: Request):
 
     servers: dict[str, list[str]] = {}
     for tool in tools:
-        server = getattr(tool, "metadata", {}).get("server", "unknown")
+        server = TOOL_TO_SERVER.get(tool.name, "unknown")
         servers.setdefault(server, []).append(tool.name)
 
     return {
@@ -56,6 +58,24 @@ async def list_mcp_servers(request: Request):
             for srv, tool_names in servers.items()
         ],
         "total_tools": len(tools),
+    }
+
+
+@router.get("/specialists")
+async def list_specialists():
+    """
+    Return the specialist agents and the tools each is scoped to.
+    Demonstrates the multi-agent supervisor architecture.
+    """
+    return {
+        "specialists": [
+            {
+                "name": name,
+                "label": SPECIALIST_LABELS[name],
+                "tools": tool_names,
+            }
+            for name, tool_names in SPECIALIST_TOOL_SCOPES.items()
+        ]
     }
 
 

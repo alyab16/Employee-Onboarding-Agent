@@ -48,8 +48,8 @@
 \newcommand{\techfoot}{%
   \vspace{3pt}\rule{\linewidth}{0.4pt}\\
   {\footnotesize\color{gray!70}%
-   \textbf{Stack:} Python\,3.13 · FastAPI · LangGraph · LangChain · ChromaDB ·
-   FastMCP · Next.js\,16 · SQLite · Claude\,Sonnet\,4.6 / Ollama}%
+   \textbf{Stack:} Python\,3.13 · FastAPI · LangGraph (supervisor + HITL) ·
+   LangChain · ChromaDB · FastMCP · Next.js\,16 · SQLite · OpenAI GPT / Ollama}%
 }
 
 % =============================================================================
@@ -71,7 +71,7 @@
   % ── Nodes ──────────────────────────────────────────────────────────────────
   \node[bb=cteal,   text width=1.55cm] at (0,   0)    (fe)     {Next.js 16\\Browser};
   \node[bb=cblue,   text width=1.55cm] at (2.7, 0)    (api)    {FastAPI\\REST + SSE};
-  \node[bb=cpurple, text width=2.3cm]  at (5.9, 0)    (agent)  {LangGraph\\ReAct Orchestrator\\+ MemorySaver};
+  \node[bb=cpurple, text width=2.5cm]  at (5.9, 0)    (agent)  {LangGraph\\Supervisor + 4\\Specialists · HITL};
   \node[bb=corange, text width=3.1cm]  at (9.7, 0.85) (mcp)    {5 × FastMCP Servers\\HR · IT · Slack · SF · Training};
   \node[bb=cblue,   text width=2.8cm]  at (9.7,-0.85) (rag)    {In-Process Knowledge Tools\\BM25 + Vector RAG (RRF)};
   \node[bb=cgray,   text width=1.65cm] at (13.3, 0.85)(sqlite) {SQLite\\State DB};
@@ -113,19 +113,20 @@
 
 \section{Architecture}
 
-The diagram above shows the four layers. The browser communicates with a FastAPI backend that streams responses as Server-Sent Events (SSE). A LangGraph \texttt{create\_react\_agent} with \texttt{MemorySaver} is the reasoning core. It dispatches work to five FastMCP subprocess servers (simulating enterprise systems) via stdin/stdout JSON-RPC, and to in-process LangChain knowledge tools backed by ChromaDB. All structured state (employees, tickets, approvals) lives in SQLite.
+The diagram above shows the four layers. The browser communicates with a FastAPI backend that streams responses as Server-Sent Events (SSE). The reasoning layer is a LangGraph \textbf{supervisor} \texttt{StateGraph} that routes each user turn to one of four scoped \texttt{create\_react\_agent} specialist subgraphs; a hop cap of 3 prevents routing loops. Specialists dispatch to five FastMCP subprocess servers via stdin/stdout JSON-RPC, or to in-process LangChain knowledge tools backed by ChromaDB. All structured state lives in SQLite; conversation and interrupt checkpoints live in \texttt{MemorySaver}.
 
 \section{AI Agent Application}
 
-The agent operates in a \textit{Reason → Act → Observe} loop, selecting tools based on the new hire's \texttt{role}, \texttt{level}, and \texttt{department}:
+The supervisor is a pure router — it uses structured output (\texttt{Route\{next, reasoning\}}) to pick exactly one specialist per hop and never produces user-visible text. Each specialist owns a scoped toolbox, so tool choice stays tight (the Training Coach cannot accidentally file an IT ticket).
 
 \begin{itemize}
-  \item \textbf{Profile enrichment} — updates the HR record; provisions Salesforce and Slack accounts with role-specific fields.
-  \item \textbf{Action execution} — opens IT tickets for hardware/software; assigns mandatory training modules matched to seniority.
-  \item \textbf{Policy Q\&A} — answers freeform questions by retrieving semantically relevant chunks from the knowledge base with source attribution.
-  \item \textbf{Approval workflows} — creates and tracks approval requests in-conversation.
-  \item \textbf{Error handling} — each tool wraps calls in try/except and returns structured error strings; the agent re-plans without crashing.
+  \item \textbf{HR Profile Specialist} — updates across HR Platform, Slack, and Salesforce; doubles as the onboarding planner for open-ended "what do I need to do?" questions.
+  \item \textbf{Training Coach} — tracks four mandatory modules in order; never marks a module complete until the user explicitly says they finished it.
+  \item \textbf{IT Access Specialist} — role-based recommendations → user picks → manager approval → IT ticket; each write is gated.
+  \item \textbf{Knowledge Expert} — hybrid-RAG Q\&A over seven policy documents with source attribution; read-only.
 \end{itemize}
+
+Specialists are written as collaborators: they ask one focused question when information is missing, propose changes before writing, and narrate progress briefly. Direct imperatives with full values execute immediately — the HITL gate is the final review, not a substitute for conversation.
 
 \subsection{RAG Pipeline (3 production techniques)}
 \begin{enumerate}
@@ -134,13 +135,21 @@ The agent operates in a \textit{Reason → Act → Observe} loop, selecting tool
   \item \textbf{Hybrid retrieval} — BM25 keyword search and vector semantic search merged via Reciprocal Rank Fusion (equal 0.5/0.5 weighting with \texttt{EnsembleRetriever}).
 \end{enumerate}
 
+\section{Human-in-the-Loop}
+
+Eight destructive tools (every \texttt{update\_*}, \texttt{add\_to\_slack\_channels}, \texttt{assign\_salesforce\_permission\_set}, \texttt{complete\_training\_module}, \texttt{request\_manager\_approval}, \texttt{submit\_it\_ticket}) are wrapped at load time with a LangGraph \texttt{interrupt()} gate. When a specialist calls one, the graph pauses, the API emits an \texttt{approval\_required} SSE event, and the frontend renders an inline approval card where the user can review arguments, \textbf{edit any string field}, then approve or reject. Only changed keys are sent as \texttt{edited\_args}; the wrapper merges them (\texttt{\{**kwargs, **edited\_args\}}) before invoking the underlying tool. State is checkpointed by \texttt{MemorySaver} so the approval survives across separate HTTP turns; rejections are fed back as a \texttt{[SKIPPED]} tool message the specialist handles gracefully.
+
+\section{Evaluation}
+
+A golden-dataset harness (\texttt{python -m evals.run\_evals}) exercises the full supervisor graph across 15 cases — HR, Training, IT, Knowledge, and routing edges. Each case runs on a fresh \texttt{thread\_id} (so cases cannot leak state) and is graded by four deterministic hard-gate evaluators — \textit{routing}, \textit{tool\_trajectory}, \textit{tool\_choice}, \textit{response\_contains} — plus an LLM-as-judge scoring response quality (1–5) against a per-case rubric. The runner exits non-zero on any hard-gate failure, so it drops straight into CI; runs are traced to LangSmith when tracing is enabled.
+
 \section{Orchestration}
 
-\textbf{Request flow:} User sends \texttt{POST /api/chat/\{id\}} → FastAPI hands off to the LangGraph orchestrator → agent issues tool calls (MCP servers or RAG) → results are observed and used for the next reasoning step → final text is streamed back as SSE and rendered as markdown in the browser.
+\textbf{Request flow:} \texttt{POST /api/chat} → FastAPI invokes the orchestrator → supervisor routes to a specialist → specialist issues tool calls (possibly pausing at an HITL gate) → results stream back as SSE (\texttt{agent\_handoff}, \texttt{tool\_call}, \texttt{tool\_result}, \texttt{approval\_required}, \texttt{text\_delta}, \texttt{done}). Interrupted runs resume via \texttt{POST /api/chat/resume} with the approval decision.
 
-\textbf{MCP communication:} Each of the five servers is a subprocess spawned at startup. \texttt{langchain-mcp-adapters} serialises tool calls to JSON-RPC over stdin/stdout, making them indistinguishable from native LangChain tools to the agent.
+\textbf{MCP communication:} Each of the five servers is a subprocess spawned at startup. \texttt{langchain-mcp-adapters} serialises tool calls to JSON-RPC over stdin/stdout; the HITL wrapper sits between the adapter and the specialist so gating is transparent to both sides.
 
-\textbf{Memory:} \texttt{MemorySaver} keeps per-employee conversation history keyed by \texttt{thread\_id}, enabling multi-turn context without re-querying the database each turn.
+\textbf{Memory:} \texttt{MemorySaver} keeps per-employee conversation history \textit{and} graph interrupt state keyed by \texttt{thread\_id}, so multi-turn context and paused approvals both survive between HTTP requests.
 
 \section{Trade-offs \& Considerations}
 
@@ -169,54 +178,73 @@ The FastAPI layer is stateless per request. Horizontal scaling requires an exter
 % =============================================================================
 % DIAGRAM 2 — Multi-Agent Topology (full width)
 % =============================================================================
-\newpage
 \vspace{2pt}
-\noindent{\normalsize\bfseries\color{accent}Multi-Agent Collaboration via MCP}
+\noindent{\normalsize\bfseries\color{accent}Supervisor Graph · HITL · Evals}
 \vspace{2pt}
 \rule{\linewidth}{0.5pt}
 \vspace{3pt}
 
 \begin{center}
 \begin{tikzpicture}
-  % ── Orchestrator ───────────────────────────────────────────────────────────
-  \node[bb=cpurple, text width=3.6cm] at (7, 3.0) (orch)
-      {Onboarding Orchestrator\\(this system)};
+  % ── User + Supervisor ──────────────────────────────────────────────────────
+  \node[bb=cteal,   text width=2.4cm] at (0.5, 3.8) (user)
+      {Employee\\Browser (SSE)};
+  \node[bb=cpurple, text width=4.4cm] at (7.0, 3.8) (sup)
+      {\textbf{Supervisor} (\texttt{StateGraph})\\structured-output router\\hop cap = 3 · never speaks};
 
   % ── Specialist agents ──────────────────────────────────────────────────────
-  \node[bb=cgreen, text width=3.0cm] at (2.3, 1.4) (it)
-      {IT Provisioning Agent\\hardware · software licences};
-  \node[bb=cgreen, text width=3.0cm] at (7.0, 1.4) (hr)
-      {HR Compliance Agent\\audits mandatory tasks};
-  \node[bb=cgreen, text width=3.0cm] at (11.7,1.4) (mgr)
-      {Manager Briefing Agent\\pre-arrival brief};
+  \node[bb=cgreen, text width=2.6cm] at (1.4, 2.1) (hrp)
+      {HR Profile\\Specialist};
+  \node[bb=cgreen, text width=2.6cm] at (5.2, 2.1) (trc)
+      {Training\\Coach};
+  \node[bb=cgreen, text width=2.6cm] at (9.0, 2.1) (ita)
+      {IT Access\\Specialist};
+  \node[bb=cgreen, text width=2.6cm] at (12.8,2.1) (knw)
+      {Knowledge\\Expert};
 
-  % ── MCP pool ───────────────────────────────────────────────────────────────
-  \node[bb=corange, text width=10.4cm] at (7.0, 0.0) (pool)
-      {MCP Server Pool \hspace{0.5em}
-       \textmd{(any framework: LangGraph · AutoGen · CrewAI)}\\
-       HR \hspace{0.3em}·\hspace{0.3em} IT \hspace{0.3em}·\hspace{0.3em} Slack
-       \hspace{0.3em}·\hspace{0.3em} Salesforce
-       \hspace{0.3em}·\hspace{0.3em} Training};
+  % ── HITL band ──────────────────────────────────────────────────────────────
+  \node[bb=corange, text width=13.6cm] at (7.0, 0.9) (hitl)
+      {\textbf{HITL \texttt{interrupt()} wrapper}
+       \textmd{— 8 destructive tools, editable args, resume on approval}};
+
+  % ── Tool pool ──────────────────────────────────────────────────────────────
+  \node[bb=corange, text width=9.6cm] at (5.2,-0.2) (pool)
+      {MCP Server Pool (stdio JSON-RPC)\\
+       HR · Slack · Salesforce · Training · IT};
+  \node[bb=cblue, text width=3.4cm] at (12.5,-0.2) (rag)
+      {In-Process\\Knowledge Tools\\(BM25 + Vector RRF)};
 
   % ── Shared state ───────────────────────────────────────────────────────────
-  \node[bb=cgray, text width=10.4cm] at (7.0,-1.0) (shared)
-      {Shared State · FastAPI REST (message bus) ·
-       SQLite \textmd{(ApprovalRequest, ITTicket, \ldots)} · ChromaDB};
+  \node[bb=cgray, text width=13.6cm] at (7.0,-1.3) (shared)
+      {\texttt{MemorySaver} \textmd{(conversation + interrupt checkpoints)}
+       · SQLite · ChromaDB};
+
+  % ── Eval harness ───────────────────────────────────────────────────────────
+  \node[bb=cpurple, text width=13.6cm] at (7.0,-2.4) (evals)
+      {\textbf{Eval Harness} \textmd{(\texttt{python -m evals.run\_evals})}
+       — 15 golden cases · 4 hard-gate evaluators · LLM-as-judge · LangSmith-traced};
 
   % ── Arrows ─────────────────────────────────────────────────────────────────
-  \draw[arr] (orch) -- (it);
-  \draw[arr] (orch) -- (hr);
-  \draw[arr] (orch) -- (mgr);
-  \draw[arr] (it.south)   -- (pool.north west);
-  \draw[arr] (hr.south)   -- (pool.north);
-  \draw[arr] (mgr.south)  -- (pool.north east);
-  \draw[arr] (pool)       -- (shared);
-  \draw[arr, dashed, bend left=50] (orch.east)
-      to node[lbl, right] {webhook} (shared.east);
+  \draw[arr] (user) -- node[lbl, above] {SSE} (sup);
+  \draw[arr] (sup) -- (hrp);
+  \draw[arr] (sup) -- (trc);
+  \draw[arr] (sup) -- (ita);
+  \draw[arr] (sup) -- (knw);
+  \draw[arr, dashed] (hrp.north east) to[bend right=12] (sup.south west);
+  \draw[arr, dashed] (knw.north west) to[bend left=12]  (sup.south east);
+  \draw[arr] (hrp.south) -- (hitl.north);
+  \draw[arr] (trc.south) -- (hitl.north);
+  \draw[arr] (ita.south) -- (hitl.north);
+  \draw[arr] (knw.south) -- (hitl.north);
+  \draw[arr] (hitl.south -| pool.north) -- (pool.north);
+  \draw[arr] (hitl.south -| rag.north)  -- (rag.north);
+  \draw[arr] (pool.south) -- (shared.north -| pool.south);
+  \draw[arr] (rag.south)  -- (shared.north -| rag.south);
+  \draw[arr, dashed] (evals.north) -- node[lbl, right] {end-to-end} (shared.south);
 \end{tikzpicture}
 \end{center}
 
-\noindent{\footnotesize Because each MCP server exposes a standard JSON-RPC interface, any agent framework can attach to the same tool pool without modification. Agents coordinate through shared SQLite state and FastAPI REST endpoints, which act as a neutral message bus. The orchestrator can delegate sub-tasks to specialist agents and receive completion signals via webhook callbacks.}
+\noindent{\footnotesize The supervisor is a pure router; each specialist is a \texttt{create\_react\_agent} subgraph with a \textit{scoped} toolbox, so tool choice stays tight by construction. Eight destructive tools pass through an \texttt{interrupt()} wrapper that surfaces an editable approval card to the user before the write is executed; \texttt{MemorySaver} checkpoints the paused graph so approvals survive across separate HTTP turns. An end-to-end evaluation harness exercises the full graph against a 15-case golden dataset and gates CI on routing, tool-trajectory, tool-choice, and response-contains failures.}
 
 \vspace{4pt}
 \techfoot

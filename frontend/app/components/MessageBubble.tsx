@@ -3,8 +3,12 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Message, ToolActivity } from "../types";
-import { SERVER_COLORS, SERVER_LABELS } from "../types";
+import type { Message, PendingApproval, ToolActivity } from "../types";
+import {
+  SERVER_COLORS,
+  SERVER_LABELS,
+  SPECIALIST_COLORS,
+} from "../types";
 
 /** Safely extract a renderable string — handles LangGraph content block objects. */
 function safeString(value: unknown): string {
@@ -76,6 +80,171 @@ function ToolActivityCard({ activity }: { activity: ToolActivity }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+interface ApprovalCardProps {
+  approval: PendingApproval;
+  onApprove: (editedArgs?: Record<string, unknown>) => void;
+  onReject: (reason?: string) => void;
+  disabled: boolean;
+}
+
+/** Shallow equality for scalar edited-arg values. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a === "string" && typeof b === "string") return a === b;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function ApprovalCard({ approval, onApprove, onReject, disabled }: ApprovalCardProps) {
+  const colors = SERVER_COLORS[approval.server] ?? SERVER_COLORS.unknown;
+  const serverLabel = SERVER_LABELS[approval.server] ?? approval.server;
+  const argEntries = Object.entries(approval.args).filter(
+    ([, v]) => v !== "" && v != null,
+  );
+
+  // Local edits to string-valued args. Keys only appear here once the user
+  // actually typed something — we diff against `approval.args` on submit so we
+  // only send fields that changed.
+  const [edits, setEdits] = useState<Record<string, string>>({});
+
+  if (approval.status === "approved") {
+    return (
+      <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700 flex items-center gap-2">
+        <span>✓</span>
+        <span className="font-medium">Approved:</span>
+        <span className="font-mono text-emerald-800">{approval.tool}</span>
+        <span className="ml-auto text-emerald-500">{approval.action}</span>
+      </div>
+    );
+  }
+
+  if (approval.status === "rejected") {
+    return (
+      <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700 flex items-center gap-2">
+        <span>✗</span>
+        <span className="font-medium">Rejected:</span>
+        <span className="font-mono text-rose-800">{approval.tool}</span>
+        <span className="ml-auto text-rose-500">
+          {approval.reason?.trim() ? approval.reason : approval.action}
+        </span>
+      </div>
+    );
+  }
+
+  const diffEdits = Object.entries(edits).reduce<Record<string, unknown>>(
+    (acc, [k, v]) => {
+      if (!sameValue(v, approval.args[k])) acc[k] = v;
+      return acc;
+    },
+    {},
+  );
+  const hasEdits = Object.keys(diffEdits).length > 0;
+
+  return (
+    <div className="rounded-md border border-amber-300 bg-amber-50 p-3 space-y-2 shadow-sm">
+      <div className="flex items-center gap-2 text-[11px]">
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+        <span className="font-semibold text-amber-900 uppercase tracking-wider text-[10px]">
+          Approval required
+        </span>
+        <span
+          className={`ml-auto px-1.5 py-0.5 rounded text-[10px] font-medium ${colors.bg} ${colors.text}`}
+        >
+          {serverLabel}
+        </span>
+      </div>
+      <p className="text-[13px] text-stone-800 font-medium leading-snug">
+        {approval.action}
+      </p>
+      <p className="text-[11px] font-mono text-stone-500">{approval.tool}</p>
+      {argEntries.length > 0 && (
+        <div className="rounded bg-white/70 border border-amber-200 px-2 py-1.5 space-y-1">
+          {argEntries.map(([k, v]) => {
+            const isEditable = typeof v === "string";
+            const displayValue = isEditable
+              ? (edits[k] ?? (v as string))
+              : JSON.stringify(v);
+            const isEdited = isEditable && k in diffEdits;
+            return (
+              <div key={k} className="flex gap-2 text-[11px] items-center">
+                <span className="font-mono text-stone-400 flex-shrink-0 min-w-[5rem]">
+                  {k}
+                </span>
+                {isEditable ? (
+                  <input
+                    type="text"
+                    value={displayValue}
+                    onChange={(e) =>
+                      setEdits((prev) => ({ ...prev, [k]: e.target.value }))
+                    }
+                    disabled={disabled}
+                    className={`flex-1 bg-white rounded px-1.5 py-0.5 text-stone-800 outline-none border transition-colors ${
+                      isEdited
+                        ? "border-amber-400 ring-1 ring-amber-300"
+                        : "border-stone-200 focus:border-amber-400"
+                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  />
+                ) : (
+                  <span className="text-stone-700 break-all">{displayValue}</span>
+                )}
+                {isEdited && (
+                  <span className="text-[9px] uppercase tracking-wider text-amber-600 font-semibold flex-shrink-0">
+                    edited
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {hasEdits && (
+        <p className="text-[10px] text-amber-700 leading-snug">
+          {Object.keys(diffEdits).length} field{Object.keys(diffEdits).length > 1 ? "s" : ""} edited — the agent will use your values.
+        </p>
+      )}
+      <div className="flex gap-2 pt-1">
+        <button
+          onClick={() => onApprove(hasEdits ? diffEdits : undefined)}
+          disabled={disabled}
+          className="flex-1 text-[12px] font-medium px-3 py-1.5 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {hasEdits ? "Approve with edits" : "Approve"}
+        </button>
+        <button
+          onClick={() => onReject()}
+          disabled={disabled}
+          className="flex-1 text-[12px] font-medium px-3 py-1.5 rounded-md bg-white border border-stone-300 text-stone-700 hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          Reject
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function HandoffBadges({ handoffs }: { handoffs: { specialist: string; label: string }[] }) {
+  if (!handoffs || handoffs.length === 0) return null;
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      {handoffs.map((h, i) => {
+        const colors = SPECIALIST_COLORS[h.specialist];
+        return (
+          <span
+            key={`${h.specialist}-${i}`}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+              colors
+                ? `${colors.bg} ${colors.text} ${colors.border}`
+                : "bg-stone-50 text-stone-600 border-stone-200"
+            }`}
+          >
+            <span className="w-1 h-1 rounded-full bg-current opacity-60" />
+            {h.label}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -171,11 +340,16 @@ function MarkdownContent({ content, isStreaming }: { content: string; isStreamin
 
 interface Props {
   message: Message;
+  onApprove?: (editedArgs?: Record<string, unknown>) => void;
+  onReject?: (reason?: string) => void;
+  isBusy?: boolean;
 }
 
-export function MessageBubble({ message }: Props) {
+export function MessageBubble({ message, onApprove, onReject, isBusy }: Props) {
   const isUser = message.role === "user";
   const displayContent = safeString(message.content);
+  const approvals = message.approvals ?? [];
+  const pendingApproval = approvals.find((a) => a.status === "pending");
 
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
@@ -193,6 +367,11 @@ export function MessageBubble({ message }: Props) {
       <div
         className={`flex flex-col gap-1.5 max-w-[85%] ${isUser ? "items-end" : "items-start"}`}
       >
+        {/* Specialist handoff badges */}
+        {!isUser && message.handoffs && message.handoffs.length > 0 && (
+          <HandoffBadges handoffs={message.handoffs} />
+        )}
+
         {/* Tool activity cards */}
         {!isUser &&
           message.toolActivities &&
@@ -204,8 +383,27 @@ export function MessageBubble({ message }: Props) {
             </div>
           )}
 
+        {/* Approval cards */}
+        {!isUser && approvals.length > 0 && (
+          <div className="w-full space-y-1.5">
+            {approvals.map((approval, i) => (
+              <ApprovalCard
+                key={approval.interruptId ?? `${approval.tool}-${i}`}
+                approval={approval}
+                onApprove={(editedArgs) => onApprove?.(editedArgs)}
+                onReject={(reason) => onReject?.(reason)}
+                disabled={
+                  !!isBusy ||
+                  approval.status !== "pending" ||
+                  approval !== pendingApproval
+                }
+              />
+            ))}
+          </div>
+        )}
+
         {/* Message text */}
-        {(displayContent || message.isStreaming) && (
+        {(displayContent || message.isStreaming || message.awaitingApproval) && (
           <div
             className={`rounded-xl px-3.5 py-2.5
               ${isUser
@@ -217,6 +415,8 @@ export function MessageBubble({ message }: Props) {
               <span>{displayContent}</span>
             ) : displayContent ? (
               <MarkdownContent content={displayContent} isStreaming={message.isStreaming} />
+            ) : message.awaitingApproval ? (
+              <span className="text-amber-600 text-xs">Paused — awaiting your approval above.</span>
             ) : (
               <span className="text-stone-400 text-xs">Thinking...</span>
             )}

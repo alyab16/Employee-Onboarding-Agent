@@ -12,6 +12,9 @@ export type AgentEventType =
   | "text_delta"
   | "tool_call"
   | "tool_result"
+  | "agent_handoff"
+  | "approval_required"
+  | "awaiting_approval"
   | "done"
   | "error";
 
@@ -33,6 +36,26 @@ export interface ToolResultEvent {
   output: string;
 }
 
+export interface AgentHandoffEvent {
+  type: "agent_handoff";
+  specialist: string;
+  label: string;
+}
+
+export interface ApprovalRequiredEvent {
+  type: "approval_required";
+  interrupt_id: string | null;
+  kind: "tool_approval";
+  tool: string;
+  server: string;
+  action: string;
+  args: Record<string, unknown>;
+}
+
+export interface AwaitingApprovalEvent {
+  type: "awaiting_approval";
+}
+
 export interface DoneEvent {
   type: "done";
 }
@@ -46,6 +69,9 @@ export type AgentEvent =
   | TextDeltaEvent
   | ToolCallEvent
   | ToolResultEvent
+  | AgentHandoffEvent
+  | ApprovalRequiredEvent
+  | AwaitingApprovalEvent
   | DoneEvent
   | ErrorEvent;
 
@@ -59,13 +85,36 @@ export interface ToolActivity {
   output?: string;
 }
 
+export interface SpecialistHandoff {
+  specialist: string;
+  label: string;
+}
+
+export type ApprovalStatus = "pending" | "approved" | "rejected";
+
+export interface PendingApproval {
+  interruptId: string | null;
+  tool: string;
+  server: string;
+  action: string;
+  args: Record<string, unknown>;
+  status: ApprovalStatus;
+  reason?: string;
+}
+
 export interface Message {
   id: string;
   role: MessageRole;
   content: string;
   /** Tool calls that happened while generating this assistant message */
   toolActivities?: ToolActivity[];
+  /** Specialists that handled this message, in the order they ran */
+  handoffs?: SpecialistHandoff[];
+  /** Approval cards rendered inside this message (current + resolved) */
+  approvals?: PendingApproval[];
   isStreaming?: boolean;
+  /** Is this message currently paused waiting for human approval? */
+  awaitingApproval?: boolean;
 }
 
 /** MCP server styling */
@@ -87,4 +136,11 @@ export const SERVER_LABELS: Record<string, string> = {
   it: "IT Ticketing",
   knowledge: "Knowledge Base",
   unknown: "Unknown",
+};
+
+export const SPECIALIST_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  hr_profile: { bg: "bg-orange-50", text: "text-orange-700", border: "border-orange-200" },
+  training:   { bg: "bg-lime-50",   text: "text-lime-700",   border: "border-lime-200"   },
+  it_access:  { bg: "bg-teal-50",   text: "text-teal-700",   border: "border-teal-200"   },
+  knowledge:  { bg: "bg-violet-50", text: "text-violet-700", border: "border-violet-200" },
 };

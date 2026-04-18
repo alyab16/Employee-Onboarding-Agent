@@ -1,14 +1,18 @@
 """
 Chat API endpoints.
 
-POST /api/chat          → SSE stream of agent events
-GET  /api/chat/history  → Conversation history for an employee
+POST /api/chat           → SSE stream; runs one turn of the supervisor graph.
+POST /api/chat/resume    → SSE stream; resumes an interrupted run with an
+                           approval decision (HITL).
+GET  /api/chat/history   → Visible conversation history for an employee.
 """
 
 import json
-from fastapi import APIRouter, Request, HTTPException
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from utils.logger import get_logger
 
@@ -21,22 +25,32 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class ResumeRequest(BaseModel):
+    employee_id: str
+    approved: bool
+    reason: str = ""
+    edited_args: dict[str, Any] = Field(default_factory=dict)
+
+
 async def _sse_event(data: dict) -> str:
-    """Format a dict as a Server-Sent Events data line."""
+    """Format a dict as a single Server-Sent Events data frame."""
     return f"data: {json.dumps(data)}\n\n"
 
 
 @router.post("")
 async def chat(request: Request, body: ChatRequest):
     """
-    Send a message to the onboarding agent and receive a streaming SSE response.
+    Send a message to the supervisor and receive a streaming SSE response.
 
     Event types emitted:
-      - text_delta   → partial assistant token
-      - tool_call    → agent is calling an MCP tool
-      - tool_result  → result returned from MCP server
-      - done         → stream complete
-      - error        → something went wrong
+      - agent_handoff      → supervisor routed to a specialist
+      - text_delta         → partial assistant token from a specialist
+      - tool_call          → agent is invoking a tool
+      - tool_result        → tool returned
+      - approval_required  → destructive tool is gated; client must POST /resume
+      - awaiting_approval  → terminator indicating the stream paused on approval
+      - done               → stream completed normally
+      - error              → something went wrong
     """
     orchestrator = request.app.state.orchestrator
 
@@ -64,9 +78,51 @@ async def chat(request: Request, body: ChatRequest):
     )
 
 
+@router.post("/resume")
+async def resume(request: Request, body: ResumeRequest):
+    """
+    Resume an interrupted run with the user's approval decision.
+    Emits the same SSE event shapes as /api/chat.
+    """
+    orchestrator = request.app.state.orchestrator
+
+    if not body.employee_id:
+        raise HTTPException(status_code=400, detail="employee_id is required.")
+
+    logger.info(
+        "api.chat.resume",
+        employee_id=body.employee_id,
+        approved=body.approved,
+    )
+
+    decision = {
+        "approved": body.approved,
+        "reason": body.reason,
+        "edited_args": body.edited_args or {},
+    }
+
+    async def event_generator():
+        try:
+            async for event in orchestrator.resume(body.employee_id, decision):
+                yield await _sse_event(event)
+        except Exception as exc:
+            logger.error("api.chat.resume_error", error=str(exc), exc_info=True)
+            yield await _sse_event({"type": "error", "message": "Internal server error."})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @router.get("/history")
 async def get_history(request: Request, employee_id: str):
-    """Return the full conversation history for an employee."""
+    """Return the full visible conversation history for an employee."""
     orchestrator = request.app.state.orchestrator
     history = await orchestrator.get_history(employee_id)
     return {"employee_id": employee_id, "messages": history}

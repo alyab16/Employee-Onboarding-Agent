@@ -17,13 +17,16 @@
 
 The **Employee Onboarding Agent** is a full-stack agentic application built as a production-minded prototype. It demonstrates:
 
-- **Native tool calling** via a LangGraph ReAct agent with per-employee memory
+- **Multi-agent supervisor architecture** — a LangGraph supervisor routes each user turn to one of four scoped specialist ReAct agents (HR Profile, Training Coach, IT Access, Knowledge Expert). Multi-domain requests can chain specialists in a single turn.
+- **Ask-first specialists** — specialists propose a plan and ask for missing information (timezone, preferred display name, which systems to request) before firing writes. Clear imperatives with full values still execute immediately; the HITL gate is the final review.
+- **Human-in-the-loop for every write** — destructive tools (profile updates, training completions, approval requests, IT tickets) pause the graph via LangGraph `interrupt()`. An inline approval card lets the user review, **edit the tool's arguments**, then approve or reject — the run resumes only after the decision.
 - **MCP-style extensibility** — each SaaS integration is a standalone FastMCP server; adding a new one requires zero changes to the orchestration logic
 - **Production RAG** over 7 internal policy documents — hybrid BM25 keyword + vector semantic search merged via Reciprocal Rank Fusion, contextual chunking (each chunk prefixed with document title and section header), and cosine similarity (HNSW). Automatic rebuild when documents or the embedding provider changes
-- **Persistent state** — all structured data backed by SQLite via SQLModel
-- **Real-time streaming** — SSE delivers agent thoughts, tool calls, and responses token-by-token to the frontend
+- **Evaluation harness** — a 15-case golden dataset graded by four deterministic evaluators plus an LLM-as-judge; exits non-zero on any hard-gate regression so it can plug straight into CI
+- **Persistent state** — all structured data backed by SQLite via SQLModel; interrupt/resume state checkpointed per-employee so approvals survive across separate HTTP turns
+- **Real-time streaming** — SSE delivers specialist handoffs, tool calls, approval requests, and response tokens to the frontend as they happen
 - **Rich markdown rendering** — agent responses rendered with full formatting (headings, lists, code blocks, tables)
-- **LangSmith tracing** — full visibility into every agent run, tool call, and token
+- **LangSmith tracing** — full visibility into every supervisor decision, specialist hop, tool call, and token
 
 ---
 
@@ -33,24 +36,36 @@ The **Employee Onboarding Agent** is a full-stack agentic application built as a
 flowchart TB
     classDef ui fill:#0EA5E9,stroke:#0284C7,color:#fff,font-weight:bold
     classDef api fill:#10B981,stroke:#059669,color:#fff,font-weight:bold
+    classDef sup fill:#6366F1,stroke:#4F46E5,color:#fff,font-weight:bold
     classDef agent fill:#8B5CF6,stroke:#7C3AED,color:#fff,font-weight:bold
     classDef llm fill:#F59E0B,stroke:#D97706,color:#000,font-weight:bold
     classDef mcp fill:#F97316,stroke:#EA580C,color:#fff,font-weight:bold
     classDef db fill:#6366F1,stroke:#4F46E5,color:#fff,font-weight:bold
     classDef rag fill:#EC4899,stroke:#DB2777,color:#fff,font-weight:bold
     classDef trace fill:#14B8A6,stroke:#0D9488,color:#fff,font-weight:bold
+    classDef hitl fill:#F59E0B,stroke:#D97706,color:#000,font-weight:bold
 
     User(["👤 Employee\nBrowser"]):::ui
 
     subgraph FE ["Frontend — Next.js 16 · React 19 · Tailwind CSS v4"]
-        Chat["💬 Chat Interface\nSSE Streaming\nMarkdown Rendering"]:::ui
+        Chat["💬 Chat + Approval UI\nSSE · Markdown"]:::ui
         Selector["👥 Employee\nSelector"]:::ui
     end
 
     subgraph BE ["Backend — FastAPI"]
-        API["🔌 REST + SSE\nEndpoints"]:::api
-        Orch["🧠 LangGraph\nReAct Agent"]:::agent
-        Mem["💾 MemorySaver\nper-employee thread"]:::agent
+        API["🔌 /chat · /chat/resume\n(SSE)"]:::api
+        subgraph GRAPH ["LangGraph Supervisor"]
+            direction TB
+            Sup["🧠 Supervisor\nStructured Route"]:::sup
+            HRP["HR Profile\nSpecialist"]:::agent
+            TRC["Training\nCoach"]:::agent
+            ITA["IT Access\nSpecialist"]:::agent
+            KNW["Knowledge\nExpert"]:::agent
+            Sup --> HRP & TRC & ITA & KNW
+            HRP & TRC & ITA & KNW -.-> Sup
+        end
+        HITL["⏸ HITL interrupt()\nwraps destructive tools"]:::hitl
+        Mem["💾 MemorySaver\nper-employee thread\n(+ interrupt state)"]:::agent
         KT["🔍 Knowledge Tools\nin-process RAG"]:::rag
     end
 
@@ -73,12 +88,13 @@ flowchart TB
     User <--> Chat
     Selector --> Chat
     Chat <-->|"HTTP POST + SSE"| API
-    API <--> Orch
-    Orch <--> Mem
-    Orch <-->|"tool calls"| LLM
-    Orch -.->|"traces"| LS
-    Orch <-->|"MCP stdio"| MCP
-    Orch <--> KT
+    API <--> GRAPH
+    GRAPH <--> Mem
+    GRAPH <-->|"tool calls"| LLM
+    GRAPH -.->|"traces"| LS
+    GRAPH <-->|"wrapped by"| HITL
+    HITL <-->|"MCP stdio"| MCP
+    HITL <--> KT
     HR & SL & SF & TR & IT --> SQLite
     KT --> Chroma
     Docs -.->|"indexed at startup"| Chroma
@@ -86,36 +102,89 @@ flowchart TB
 
 ---
 
-## Agent Loop — ReAct Pattern
+## Supervisor Loop — Multi-Agent Routing
 
 ```mermaid
 flowchart LR
     classDef input fill:#0EA5E9,stroke:#0284C7,color:#fff,font-weight:bold
-    classDef think fill:#8B5CF6,stroke:#7C3AED,color:#fff,font-weight:bold
-    classDef tool fill:#F97316,stroke:#EA580C,color:#fff,font-weight:bold
-    classDef check fill:#F59E0B,stroke:#D97706,color:#000,font-weight:bold
+    classDef sup fill:#6366F1,stroke:#4F46E5,color:#fff,font-weight:bold
+    classDef agent fill:#8B5CF6,stroke:#7C3AED,color:#fff,font-weight:bold
     classDef stream fill:#10B981,stroke:#059669,color:#fff,font-weight:bold
+    classDef check fill:#F59E0B,stroke:#D97706,color:#000,font-weight:bold
 
-    MSG["📨 User Message\n+ Employee ID"]:::input
-    HIST["📜 Conversation\nHistory\nMemorySaver"]:::think
-    LLM["🧠 LLM Reasoning\nWhat action next?"]:::think
-    TOOL["⚡ Execute Tool\nMCP or in-process"]:::tool
-    RES["📋 Tool Result\nback to context"]:::tool
-    MORE{"Stop reason\n= tool_use?"}:::check
-    STREAM["💬 Stream tokens\nSSE → Frontend"]:::stream
-    DONE["✅ done event\nto client"]:::stream
+    MSG["📨 User Message"]:::input
+    SUP["🧠 Supervisor\nstructured output:\n{next, reasoning}"]:::sup
+    SPEC["🧩 Specialist ReAct Agent\n(scoped tools + prompt)"]:::agent
+    DONE{"next == FINISH\nor hop cap = 3?"}:::check
+    OUT["✅ done"]:::stream
 
-    MSG --> HIST
-    HIST --> LLM
-    LLM --> TOOL
-    TOOL --> RES
-    RES --> MORE
-    MORE -->|"yes — more tools needed"| LLM
-    MORE -->|"no — end_turn"| STREAM
-    STREAM --> DONE
+    MSG --> SUP
+    SUP -->|"goto hr_profile"| SPEC
+    SUP -->|"goto training"| SPEC
+    SUP -->|"goto it_access"| SPEC
+    SUP -->|"goto knowledge"| SPEC
+    SPEC --> DONE
+    DONE -->|"no — more work"| SUP
+    DONE -->|"yes"| OUT
 ```
 
-Each turn the agent autonomously decides which tool to call, executes it, feeds the result back into context, and repeats until it has enough information to respond.
+The supervisor never speaks to the user — it's a pure router that uses structured
+output (`Route{next, reasoning}`) to pick one of four specialists per hop. Each
+specialist is a `create_react_agent` subgraph with a **scoped toolbox**, so tool
+choice stays tight: the Training Coach literally can't accidentally submit an IT
+ticket. Multi-domain requests (*"update my profile AND tell me about PTO"*) are
+handled by chaining specialists — the supervisor re-runs after each one and can
+route again or FINISH. A hop cap of 3 prevents routing loops.
+
+---
+
+## Human-in-the-Loop — Approval Before Every Write
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Employee
+    participant FE as Frontend
+    participant API as FastAPI
+    participant G as Supervisor Graph
+    participant T as MCP Tool
+
+    U->>FE: "Update my Slack phone to 555-0100"
+    FE->>API: POST /api/chat
+    API->>G: stream()
+    G->>G: supervisor → hr_profile
+    G->>T: update_slack_profile(...)
+    Note over T: wrapped with HITL
+    T-->>G: interrupt({ tool, args, action })
+    G-->>API: approval_required + awaiting_approval
+    API-->>FE: SSE events
+    FE-->>U: Approval card rendered inline
+    U->>FE: Click "Approve"
+    FE->>API: POST /api/chat/resume { approved: true }
+    API->>G: resume(Command(resume=...))
+    G->>T: actually execute update_slack_profile
+    T-->>G: result
+    G-->>API: text_delta + done
+    API-->>FE: SSE events
+    FE-->>U: "Updated. ✓"
+```
+
+Eight tools are gated — every `update_*`, `add_to_slack_channels`,
+`assign_salesforce_permission_set`, `complete_training_module`,
+`request_manager_approval`, and `submit_it_ticket`. The wrapper calls
+`interrupt()` before invoking the underlying MCP tool; state is checkpointed
+by the same `MemorySaver` that stores conversation history, so an approval
+request survives across two separate HTTP turns without any server-side
+session state. Rejections are delivered back to the agent as a
+`[SKIPPED] <tool> was not executed. <reason>` tool message, which the
+specialist handles gracefully ("Understood — I'll leave your profile as-is").
+
+**Editable arguments.** The approval card surfaces every field the tool would
+be called with. String-valued args are editable inline; when the user clicks
+*"Approve with edits"*, only the changed keys are sent in `edited_args`, and
+the HITL wrapper merges them with the agent's original kwargs
+(`{**kwargs, **edited_args}`) before invoking the tool. This turns
+rubber-stamping into a genuine review step.
 
 ---
 
@@ -172,11 +241,11 @@ flowchart TD
 
 ## Tool Architecture
 
-The agent has access to **20 tools** from two sources:
+The four specialists share a pool of **20 tools** from two sources. Each specialist only sees the subset relevant to its domain; **8 destructive tools are wrapped with an HITL interrupt**.
 
 ### MCP Servers (5 × FastMCP subprocess, stdio transport)
 
-Each simulates an external SaaS platform. Adding a new server requires **zero changes** to the agent or orchestration logic.
+Each simulates an external SaaS platform. Adding a new server requires **zero changes** to the agent or orchestration logic. Destructive tools (marked 🔒 below) are wrapped at load time with a LangGraph `interrupt()` gate.
 
 ```mermaid
 flowchart LR
@@ -302,7 +371,9 @@ flowchart TB
 |---|---|---|
 | **Frontend** | Next.js 16, React 19, Tailwind CSS v4, react-markdown | Chat UI, SSE streaming, markdown rendering |
 | **Backend** | FastAPI, Python 3.13, Uvicorn | REST API, SSE endpoint, app lifecycle |
-| **Agent Orchestration** | LangGraph (`create_react_agent`) | ReAct loop, per-employee conversation state |
+| **Agent Orchestration** | LangGraph `StateGraph` + `create_react_agent` subgraphs | Supervisor routing + four scoped specialists + per-employee MemorySaver |
+| **Human-in-the-Loop** | LangGraph `interrupt()` + `Command(resume=...)` | Approval gate before every destructive tool; state checkpointed across HTTP turns |
+| **Evaluation** | Custom harness + LangSmith tracing | 15-case golden dataset · 4 deterministic scorers + LLM-as-judge |
 | **LLM** | OpenAI GPT-4o-mini / Ollama | Reasoning, tool selection, response generation |
 | **MCP Servers** | FastMCP 2.3 | 5 independent mock SaaS integrations (stdio) |
 | **MCP Client** | langchain-mcp-adapters | Bridges LangGraph ↔ MCP stdio protocol |
@@ -335,9 +406,18 @@ EmployeeOnboardingAgent/
     ├── main.py                        # App entry point, startup sequence
     │
     ├── agent/
-    │   ├── orchestrator.py            # LangGraph agent + MCP client lifecycle
+    │   ├── orchestrator.py            # Orchestrator: graph lifecycle + streaming + resume
+    │   ├── supervisor.py              # StateGraph supervisor (structured-output router)
+    │   ├── specialists.py             # Four scoped ReAct sub-agents + tool scoping
+    │   ├── hitl.py                    # interrupt() wrapper for destructive tools
     │   ├── knowledge_tools.py         # In-process RAG tools (ChromaDB search)
-    │   └── prompts.py                 # System prompt
+    │   └── prompts.py                 # Supervisor + specialist system prompts
+    │
+    ├── evals/                         # Agent evaluation harness
+    │   ├── dataset.py                 # 15 golden cases across all specialists
+    │   ├── evaluators.py              # Routing, trajectory, tool-choice, LLM-judge
+    │   ├── run_evals.py               # python -m evals.run_evals
+    │   └── README.md
     │
     ├── mcp_servers/                   # One FastMCP server per SaaS
     │   ├── data_store.py              # Seed data (canonical source of truth)
@@ -365,8 +445,8 @@ EmployeeOnboardingAgent/
     │   └── marketing_guide.md
     │
     ├── api/
-    │   ├── chat.py                    # POST /api/chat (SSE), GET /api/chat/history
-    │   └── admin.py                   # Employees list, MCP servers, DB reset
+    │   ├── chat.py                    # /chat (SSE) · /chat/resume (HITL) · /chat/history
+    │   └── admin.py                   # Employees · MCP servers · specialists · DB reset
     │
     ├── utils/
     │   └── logger.py                  # structlog — console + rotating file handler
@@ -461,22 +541,41 @@ Open [http://localhost:3000](http://localhost:3000), select an employee, and sta
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/api/chat` | Send a message; returns SSE stream of agent events |
+| `POST` | `/api/chat/resume` | Resume an interrupted run with an approval decision |
 | `GET` | `/api/chat/history?employee_id=` | Full conversation history for an employee |
 | `GET` | `/api/admin/employees` | List employees (used by frontend selector) |
 | `GET` | `/api/admin/mcp-servers` | List active MCP servers and their discovered tools |
+| `GET` | `/api/admin/specialists` | List specialist agents and their scoped tools |
 | `POST` | `/api/admin/reset-db` | Wipe all data and re-seed from mock data |
 | `GET` | `/health` | Health check |
 
 ### SSE Event Types
 
 ```jsonc
-{ "type": "text_delta",  "content": "Hi Alice..." }          // streaming token
-{ "type": "tool_call",   "tool": "get_employee_profile",
-  "server": "hr",        "input": { "employee_id": "emp001" } }
-{ "type": "tool_result", "tool": "get_employee_profile",
+{ "type": "agent_handoff",     "specialist": "hr_profile",
+  "label": "HR Profile Specialist" }                        // supervisor routed
+{ "type": "text_delta",        "content": "Hi Alice..." }   // streaming token
+{ "type": "tool_call",         "tool": "get_employee_profile",
+  "server": "hr",              "input": { "employee_id": "emp001" } }
+{ "type": "tool_result",       "tool": "get_employee_profile",
   "output": "HR Platform — Employee Profile..." }
+{ "type": "approval_required", "interrupt_id": "...",       // HITL
+  "tool": "update_slack_profile", "server": "slack",
+  "action": "Update Slack profile fields",
+  "args": { "employee_id": "emp001", "phone": "415-555-0100" } }
+{ "type": "awaiting_approval" }                             // stream paused
 { "type": "done" }
-{ "type": "error",       "message": "..." }
+{ "type": "error",             "message": "..." }
+```
+
+Resume an interrupted run by POSTing to `/api/chat/resume`:
+
+```jsonc
+{ "employee_id": "emp001",
+  "approved":    true,
+  "reason":      "",
+  "edited_args": { }       // optional — override the agent's tool arguments
+}
 ```
 
 ---
@@ -548,6 +647,37 @@ rm backend/data.db    # re-created on next startup
 ```
 
 Conversation history (LangGraph MemorySaver) is in-memory only and resets on every backend restart.
+
+---
+
+## Evaluations
+
+A 15-case golden dataset exercises every specialist and the trickier routing
+edges. Each case is graded by five evaluators:
+
+| Evaluator           | What it measures                                         | Hard gate |
+|---------------------|----------------------------------------------------------|:---------:|
+| `routing`           | Supervisor routed to the expected specialist first       | ✅        |
+| `tool_trajectory`   | Every required tool was called                           | ✅        |
+| `tool_choice`       | No forbidden tool was called                             | ✅        |
+| `response_contains` | Final response includes the required substrings         | ✅        |
+| `response_quality`  | LLM-as-judge grade (1–5) against a per-case rubric       | —         |
+
+Every case runs against a fresh LangGraph thread id so cases can't leak state
+into each other; HITL interrupts are auto-approved by the runner. The runner
+exits non-zero on any hard-gate failure, so it drops straight into CI:
+
+```bash
+cd backend
+
+uv run python -m evals.run_evals              # full suite
+uv run python -m evals.run_evals --case hr_update_slack_phone
+uv run python -m evals.run_evals --json evals/latest.json
+```
+
+If `LANGCHAIN_TRACING_V2=true` is set, every case is also traced to LangSmith
+under the configured project — invaluable for diagnosing failures. See
+[`backend/evals/README.md`](backend/evals/README.md) for adding new cases.
 
 ---
 

@@ -18,9 +18,14 @@ const SUGGESTED_PROMPTS = [
 ];
 
 export function ChatInterface({ employee, onLogout }: Props) {
-  const { messages, isLoading, error, sendMessage, clearHistory } = useChat(
-    employee.id,
-  );
+  const {
+    messages,
+    isLoading,
+    error,
+    sendMessage,
+    respondToApproval,
+    clearHistory,
+  } = useChat(employee.id);
   const [input, setInput] = useState("");
   const [chatKey, setChatKey] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -39,9 +44,12 @@ export function ChatInterface({ employee, onLogout }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employee.id, chatKey]);
 
+  const awaitingApproval = messages.some((m) => m.awaitingApproval);
+  const inputDisabled = isLoading || awaitingApproval;
+
   const handleSend = () => {
     const text = input.trim();
-    if (!text || isLoading) return;
+    if (!text || inputDisabled) return;
     setInput("");
     sendMessage(text);
     inputRef.current?.focus();
@@ -108,7 +116,17 @@ export function ChatInterface({ employee, onLogout }: Props) {
           </div>
         )}
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            isBusy={isLoading}
+            onApprove={(edited_args) =>
+              respondToApproval({ approved: true, edited_args })
+            }
+            onReject={(reason) =>
+              respondToApproval({ approved: false, reason })
+            }
+          />
         ))}
         <div ref={bottomRef} />
       </div>
@@ -144,9 +162,9 @@ export function ChatInterface({ employee, onLogout }: Props) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a message..."
+            placeholder={awaitingApproval ? "Resolve the approval above to continue..." : "Type a message..."}
             rows={1}
-            disabled={isLoading}
+            disabled={inputDisabled}
             className="flex-1 bg-transparent resize-none outline-none text-sm text-stone-800 placeholder-stone-400 max-h-28 disabled:opacity-50"
             style={{ height: "auto" }}
             onInput={(e) => {
@@ -157,7 +175,7 @@ export function ChatInterface({ employee, onLogout }: Props) {
           />
           <button
             onClick={handleSend}
-            disabled={!input.trim() || isLoading}
+            disabled={!input.trim() || inputDisabled}
             className="flex-shrink-0 w-7 h-7 rounded-lg bg-teal-600 text-white flex items-center justify-center
               hover:bg-teal-700 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
           >
