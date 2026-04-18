@@ -65,9 +65,9 @@ export function ChatInterface({ employee, onLogout }: Props) {
   return (
     <div className="flex flex-col h-full bg-stone-50">
       {/* Header — compact, minimal */}
-      <header className="flex-shrink-0 flex items-center justify-between px-5 py-2.5 bg-white border-b border-stone-200">
+      <header className="flex-shrink-0 flex items-center justify-between px-5 py-2.5 bg-white/90 backdrop-blur-sm border-b border-stone-200">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-stone-800 flex items-center justify-center text-white font-bold text-[10px]">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-stone-700 to-stone-900 flex items-center justify-center text-white font-bold text-[10px] shadow-sm ring-1 ring-stone-900/10">
             {employee.name
               .split(" ")
               .map((n) => n[0])
@@ -81,6 +81,13 @@ export function ChatInterface({ employee, onLogout }: Props) {
               {employee.role} · {employee.level} · {employee.department}
             </p>
           </div>
+          <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
+            </span>
+            Online
+          </span>
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -104,15 +111,23 @@ export function ChatInterface({ employee, onLogout }: Props) {
       </header>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4">
+      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 chat-backdrop chat-scroll">
         {!hasStarted && (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
-            <div className="w-10 h-10 rounded-xl bg-teal-600 flex items-center justify-center text-white text-lg">
-              AI
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-center animate-fade-in-up">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-teal-500 via-teal-600 to-emerald-600 flex items-center justify-center text-white shadow-md ring-1 ring-teal-900/10">
+              <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2M12 19v2M5 12H3M21 12h-2M6 6l1.5 1.5M16.5 16.5 18 18M6 18l1.5-1.5M16.5 7.5 18 6" />
+                <circle cx="12" cy="12" r="4" />
+              </svg>
             </div>
-            <p className="text-sm text-stone-500">
-              Connecting to your onboarding assistant...
-            </p>
+            <div>
+              <p className="text-sm font-semibold text-stone-700">
+                Your onboarding assistant
+              </p>
+              <p className="text-xs text-stone-400 mt-0.5">
+                Connecting securely...
+              </p>
+            </div>
           </div>
         )}
         {messages.map((msg) => (
@@ -176,8 +191,8 @@ export function ChatInterface({ employee, onLogout }: Props) {
           <button
             onClick={handleSend}
             disabled={!input.trim() || inputDisabled}
-            className="flex-shrink-0 w-7 h-7 rounded-lg bg-teal-600 text-white flex items-center justify-center
-              hover:bg-teal-700 disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
+            className="flex-shrink-0 w-8 h-8 rounded-lg bg-gradient-to-br from-teal-500 to-emerald-600 text-white flex items-center justify-center shadow-sm
+              hover:shadow-md hover:from-teal-600 hover:to-emerald-700 active:scale-95 disabled:opacity-25 disabled:cursor-not-allowed transition-all"
           >
             {isLoading ? (
               <span className="w-3 h-3 border-[1.5px] border-white border-t-transparent rounded-full animate-spin" />

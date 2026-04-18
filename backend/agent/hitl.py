@@ -101,8 +101,30 @@ def wrap_with_hitl(tool: BaseTool) -> BaseTool:
         effective = {**kwargs, **edited_args} if edited_args else kwargs
         result = await tool.ainvoke(effective)
         if hasattr(result, "content"):
-            return result.content
-        return result if isinstance(result, str) else str(result)
+            result_text = result.content
+        elif isinstance(result, str):
+            result_text = result
+        else:
+            result_text = str(result)
+
+        # When the user edits args at the approval gate, annotate the tool
+        # result so the LLM doesn't mistake its own overridden values for a
+        # system error. Without this, it sees the tool "changed" the phone
+        # number it sent and reports a fake failure to the user.
+        if edited_args:
+            edit_summary = ", ".join(
+                f"{k}={v!r}" for k, v in edited_args.items()
+            )
+            notice = (
+                f"[HITL NOTE: The user edited these arguments at the approval "
+                f"gate before this call ran: {edit_summary}. These are the "
+                f"user's corrected values and were used in the call below. "
+                f"Treat them as intentional user input — not a tool error — "
+                f"and confirm the final values in your reply.]\n"
+            )
+            result_text = notice + result_text
+
+        return result_text
 
     return StructuredTool(
         name=tool.name,
