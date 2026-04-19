@@ -36,12 +36,18 @@ logger = get_logger("orchestrator")
 
 _SERVERS_DIR = Path(__file__).parent.parent / "mcp_servers"
 
+# Forward the parent process env to MCP stdio subprocesses. Without this the
+# MCP client ships only a minimal env and children miss DB_PATH/CHROMA_PATH,
+# causing each subprocess to open its own SQLite file at the default path —
+# so the backend's seeded DB and the MCP tools' DB end up disjoint.
+_MCP_ENV = os.environ.copy()
+
 MCP_SERVERS_CONFIG = {
-    "hr":         {"command": "python", "args": [str(_SERVERS_DIR / "hr_server.py")],         "transport": "stdio"},
-    "slack":      {"command": "python", "args": [str(_SERVERS_DIR / "slack_server.py")],      "transport": "stdio"},
-    "salesforce": {"command": "python", "args": [str(_SERVERS_DIR / "salesforce_server.py")], "transport": "stdio"},
-    "training":   {"command": "python", "args": [str(_SERVERS_DIR / "training_server.py")],   "transport": "stdio"},
-    "it":         {"command": "python", "args": [str(_SERVERS_DIR / "it_server.py")],         "transport": "stdio"},
+    "hr":         {"command": "python", "args": [str(_SERVERS_DIR / "hr_server.py")],         "transport": "stdio", "env": _MCP_ENV},
+    "slack":      {"command": "python", "args": [str(_SERVERS_DIR / "slack_server.py")],      "transport": "stdio", "env": _MCP_ENV},
+    "salesforce": {"command": "python", "args": [str(_SERVERS_DIR / "salesforce_server.py")], "transport": "stdio", "env": _MCP_ENV},
+    "training":   {"command": "python", "args": [str(_SERVERS_DIR / "training_server.py")],   "transport": "stdio", "env": _MCP_ENV},
+    "it":         {"command": "python", "args": [str(_SERVERS_DIR / "it_server.py")],         "transport": "stdio", "env": _MCP_ENV},
 }
 
 KNOWLEDGE_TOOLS = [search_company_knowledge, list_knowledge_sources]

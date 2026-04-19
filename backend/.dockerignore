@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime state — rebuilt inside the container / mounted via volumes
+data.db
+data.db-journal
+chroma_db/
+logs/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker itself
+Dockerfile
+.dockerignore

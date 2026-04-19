@@ -1,0 +1,72 @@
+# Acme Corp — Employee Onboarding Agent
+#
+# Two services:
+#   - backend  : FastAPI + LangGraph supervisor + FastMCP subprocesses (port 8000)
+#   - frontend : Next.js 16 standalone build       (port 3000)
+#
+# Quick start:
+#   1. cp backend/.env.example backend/.env   # fill in OPENAI_API_KEY etc.
+#   2. docker compose up --build
+#   3. open http://localhost:3000
+#
+# State that persists across restarts (named volumes):
+#   - backend-data   → SQLite database (employee profiles, approvals, tickets)
+#   - backend-chroma → ChromaDB vector index over knowledge_docs
+#   - backend-logs   → structured JSON logs
+#
+# To talk to a host-side Ollama server, set OLLAMA_BASE_URL in backend/.env to
+# http://host.docker.internal:11434 (Docker Desktop) or the host IP (Linux).
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: onboarding-backend:latest
+    container_name: onboarding-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      # Allow the frontend container + host browser to hit the API.
+      CORS_ORIGINS: "http://localhost:3000,http://frontend:3000"
+      DB_PATH: /app/data/data.db
+      CHROMA_PATH: /app/chroma_db
+    volumes:
+      - backend-data:/app/data
+      - backend-chroma:/app/chroma_db
+      - backend-logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    # host.docker.internal resolves to the host on Docker Desktop — lets the
+    # container reach a locally-running Ollama at http://host.docker.internal:11434.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Baked into the client bundle. The browser — not the container —
+        # uses this URL, so it must be reachable from the user's machine.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    image: onboarding-frontend:latest
+    container_name: onboarding-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  backend-data:
+  backend-chroma:
+  backend-logs:

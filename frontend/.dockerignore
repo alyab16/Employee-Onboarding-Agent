@@ -1,0 +1,24 @@
+node_modules/
+.next/
+out/
+.turbo/
+coverage/
+
+# Local env files — values baked in at build time come through ARGs.
+.env.local
+.env.*.local
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker itself
+Dockerfile
+.dockerignore
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

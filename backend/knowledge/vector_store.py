@@ -27,7 +27,9 @@ from utils.logger import get_logger
 logger = get_logger("vector_store")
 
 DOCS_PATH = Path(__file__).parent.parent / "knowledge_docs"
-CHROMA_PATH = Path(__file__).parent.parent / "chroma_db"
+# CHROMA_PATH can be overridden via env var so it can live on a mounted volume
+# when the backend runs inside a container.
+CHROMA_PATH = Path(os.getenv("CHROMA_PATH") or (Path(__file__).parent.parent / "chroma_db"))
 HASH_FILE = CHROMA_PATH / ".docs_hash"
 BM25_DOCS_FILE = CHROMA_PATH / ".bm25_docs.pkl"
 
@@ -151,10 +153,15 @@ def init_vector_store() -> None:
 
     logger.info("vector_store.building", docs_path=str(DOCS_PATH), provider=_current_provider())
 
-    # Wipe stale data to avoid dimension mismatches
-    if CHROMA_PATH.exists():
-        shutil.rmtree(CHROMA_PATH)
+    # Wipe stale data to avoid dimension mismatches. We empty the directory
+    # in-place (rather than rmtree-ing it) because CHROMA_PATH may be a Docker
+    # volume mount point — removing it would raise "Device or resource busy".
     CHROMA_PATH.mkdir(parents=True, exist_ok=True)
+    for child in CHROMA_PATH.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
 
     # Load and tag each document with metadata
     raw_docs: list[Document] = []
