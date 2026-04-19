@@ -462,7 +462,76 @@ EmployeeOnboardingAgent/
 
 ## Getting Started
 
-### Prerequisites
+Two supported paths: **Docker** (fastest, one command) or **local development** (hot reload, direct access to `uv` / `npm`). Pick whichever suits your workflow.
+
+### Option A — Docker (recommended)
+
+Spin up the full stack (backend, frontend, and persistent volumes) with one command.
+
+**Prerequisites:** Docker Desktop 4.x or Docker Engine 24+ with the compose plugin.
+
+```bash
+# 1. Configure the backend environment
+cp backend/.env.example backend/.env
+# Edit backend/.env — add OPENAI_API_KEY, or configure Ollama settings
+
+# 2. Build and start both services
+docker compose up --build
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+On first boot the backend seeds the SQLite database, indexes the 7 knowledge docs into ChromaDB, and spawns the 5 FastMCP subprocesses. Subsequent starts reuse the seeded state.
+
+**Services and ports**
+
+| Service    | Port | Image                        |
+|------------|------|------------------------------|
+| `backend`  | 8000 | `onboarding-backend:latest`  |
+| `frontend` | 3000 | `onboarding-frontend:latest` |
+
+**Persistent volumes** — survive `docker compose down`, wiped by `docker compose down -v`.
+
+| Volume           | Mounted at        | Contents                                    |
+|------------------|-------------------|---------------------------------------------|
+| `backend-data`   | `/app/data`       | SQLite DB — employees, approvals, tickets   |
+| `backend-chroma` | `/app/chroma_db`  | ChromaDB index over `knowledge_docs/`       |
+| `backend-logs`   | `/app/logs`       | Structured JSON application logs            |
+
+**Talking to a host-side Ollama**
+
+The backend container reaches the host via `host.docker.internal` (already mapped in `docker-compose.yml`). In `backend/.env`:
+
+```env
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+```
+
+**Pointing the browser at a non-default backend**
+
+`NEXT_PUBLIC_API_URL` is baked into the frontend bundle at build time. Override it when the browser needs to reach the backend at a URL other than `http://localhost:8000`:
+
+```bash
+NEXT_PUBLIC_API_URL=http://192.168.1.20:8000 docker compose up --build
+```
+
+**Common commands**
+
+```bash
+docker compose logs -f backend          # tail backend logs
+docker compose logs -f frontend         # tail frontend logs
+docker compose restart backend          # restart the backend only
+docker compose down                     # stop both services (keep volumes)
+docker compose down -v                  # stop and wipe all volumes (full reset)
+docker compose up --build backend       # rebuild just the backend
+```
+
+`docker compose down -v` forces a full re-seed on next start and is the fastest way to reset all state.
+
+---
+
+### Option B — Local development
+
+#### Prerequisites
 
 - Python 3.13+ with [uv](https://docs.astral.sh/uv/)
 - Node.js 20+
