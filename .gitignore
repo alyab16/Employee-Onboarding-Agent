@@ -47,3 +47,4 @@ backend/data.db
 solution_design.synctex.gz
 solution_design.out
 solution_design.aux
+.claude/settings.local.json

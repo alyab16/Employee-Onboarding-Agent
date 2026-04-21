@@ -158,12 +158,13 @@ sequenceDiagram
     T-->>G: interrupt({ tool, args, action })
     G-->>API: approval_required + awaiting_approval
     API-->>FE: SSE events
-    FE-->>U: Approval card rendered inline
-    U->>FE: Click "Approve"
-    FE->>API: POST /api/chat/resume { approved: true }
+    FE-->>U: Approval card — semantic form fields
+    Note over U,FE: User may edit any field inline<br/>(phone, channels, permission set, …)
+    U->>FE: Approve (optionally with edits)
+    FE->>API: POST /api/chat/resume { approved, edited_args }
     API->>G: resume(Command(resume=...))
-    G->>T: actually execute update_slack_profile
-    T-->>G: result
+    G->>T: execute with {...args, ...edited_args}
+    T-->>G: result (prefixed with [HITL NOTE] if edited)
     G-->>API: text_delta + done
     API-->>FE: SSE events
     FE-->>U: "Updated. ✓"
@@ -179,11 +180,15 @@ session state. Rejections are delivered back to the agent as a
 `[SKIPPED] <tool> was not executed. <reason>` tool message, which the
 specialist handles gracefully ("Understood — I'll leave your profile as-is").
 
-**Editable arguments.** The approval card surfaces every field the tool would
-be called with. String-valued args are editable inline; when the user clicks
-*"Approve with edits"*, only the changed keys are sent in `edited_args`, and
-the HITL wrapper merges them with the agent's original kwargs
-(`{**kwargs, **edited_args}`) before invoking the tool. This turns
+**Editable arguments.** The approval card renders a **semantic form** — each
+arg is matched to the right widget by name: phone numbers get a tel input,
+emails get an email input, channel lists and system lists get chip inputs,
+Salesforce permission sets and training module IDs get curated dropdowns,
+and free-text fields fall back to a labelled text input. Only the changed
+keys ship in `edited_args`; the HITL wrapper merges them with the agent's
+original kwargs (`{**kwargs, **edited_args}`) before invoking the tool, and
+prefixes the tool result with a `[HITL NOTE: …]` line so the agent treats
+the edits as intentional user input rather than a tool error. This turns
 rubber-stamping into a genuine review step.
 
 ---
