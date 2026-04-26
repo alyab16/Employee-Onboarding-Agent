@@ -29,6 +29,10 @@ from langgraph.types import Command
 
 from agent.prompts import SUPERVISOR_PROMPT
 from agent.specialists import SPECIALIST_LABELS
+from utils.logger import get_logger
+
+
+logger = get_logger("supervisor")
 
 # LangChain's `with_structured_output` attaches the parsed pydantic object to an
 # internal `parsed` field whose declared type is narrower than the runtime value,
@@ -47,9 +51,21 @@ MAX_HOPS_PER_TURN = 3
 
 
 class Route(BaseModel):
-    """Supervisor routing decision."""
+    """Continuation routing — after a specialist has run, chain or finish."""
     next: Literal["hr_profile", "training", "it_access", "knowledge", "FINISH"] = Field(
         description="Which specialist should handle the latest user turn, or FINISH."
+    )
+    reasoning: str = Field(description="One sentence justifying the choice.")
+
+
+class FreshTurnRoute(BaseModel):
+    """
+    First-hop routing for a fresh user turn. FINISH is intentionally absent —
+    a new user message must always be handled by a specialist, otherwise the
+    stream returns no text and the UI shows an empty bubble.
+    """
+    next: Literal["hr_profile", "training", "it_access", "knowledge"] = Field(
+        description="Specialist that should handle this fresh user turn."
     )
     reasoning: str = Field(description="One sentence justifying the choice.")
 
@@ -86,16 +102,30 @@ def build_supervisor_graph(
         specialists: {name: compiled ReAct agent}. Keys must match SPECIALIST_NAMES.
         checkpointer: persistence for interrupt/resume across HTTP turns.
     """
-    router_llm = llm.with_structured_output(Route)
+    fresh_router = llm.with_structured_output(FreshTurnRoute)
+    continuation_router = llm.with_structured_output(Route)
 
     async def supervisor_node(state: SupervisorState) -> Command:
         hops = _hops_since_last_human(state["messages"])
         if hops >= MAX_HOPS_PER_TURN:
             # Safety net — end the turn even if the LLM would keep routing.
+            logger.info("supervisor.route", next="FINISH", reason="hop_cap", hops=hops)
             return Command(goto=END, update={"current_specialist": None})
 
-        decision: Route = await router_llm.ainvoke(
+        # Fresh turn: a specialist MUST handle the user's message. Use a schema
+        # without FINISH so the LLM cannot accidentally end the turn silently.
+        is_fresh_turn = hops == 0
+        router = fresh_router if is_fresh_turn else continuation_router
+        decision = await router.ainvoke(
             [SystemMessage(content=SUPERVISOR_PROMPT)] + state["messages"]
+        )
+
+        logger.info(
+            "supervisor.route",
+            next=decision.next,
+            reasoning=decision.reasoning,
+            hops=hops,
+            fresh_turn=is_fresh_turn,
         )
 
         if decision.next == "FINISH":

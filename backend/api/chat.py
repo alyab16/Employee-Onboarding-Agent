@@ -126,3 +126,19 @@ async def get_history(request: Request, employee_id: str):
     orchestrator = request.app.state.orchestrator
     history = await orchestrator.get_history(employee_id)
     return {"employee_id": employee_id, "messages": history}
+
+
+@router.delete("/history")
+async def reset_history(request: Request, employee_id: str):
+    """
+    Wipe checkpointed conversation state for an employee. The frontend's
+    "Restart" button calls this so backend memory matches the cleared UI;
+    otherwise the next turn runs against stale history (including any pending
+    HITL interrupt) and the agent can silently produce no response.
+    """
+    if not employee_id:
+        raise HTTPException(status_code=400, detail="employee_id is required.")
+    orchestrator = request.app.state.orchestrator
+    logger.info("api.chat.reset", employee_id=employee_id)
+    await orchestrator.reset_thread(employee_id)
+    return {"employee_id": employee_id, "reset": True}

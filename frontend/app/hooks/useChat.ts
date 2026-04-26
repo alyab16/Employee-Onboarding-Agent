@@ -345,13 +345,26 @@ export function useChat(employeeId: string | null) {
     [employeeId, messages, consumeStream],
   );
 
-  const clearHistory = useCallback(() => {
+  const clearHistory = useCallback(async () => {
     abortRef.current?.abort();
     awaitingIdRef.current = null;
     setMessages([]);
     setError(null);
     setIsLoading(false);
-  }, []);
+
+    if (!employeeId) return;
+    // Wipe backend checkpointed state so the next turn starts clean. Without
+    // this, the supervisor sees stale history (and possibly a pending HITL
+    // interrupt) and the next message can return an empty response.
+    try {
+      await fetch(
+        `${API_BASE}/api/chat/history?employee_id=${encodeURIComponent(employeeId)}`,
+        { method: "DELETE" },
+      );
+    } catch {
+      // Best-effort — UI is already cleared.
+    }
+  }, [employeeId]);
 
   return {
     messages,

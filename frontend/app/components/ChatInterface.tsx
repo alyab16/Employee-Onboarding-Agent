@@ -91,8 +91,8 @@ export function ChatInterface({ employee, onLogout }: Props) {
         </div>
         <div className="flex items-center gap-1">
           <button
-            onClick={() => {
-              clearHistory();
+            onClick={async () => {
+              await clearHistory();
               greetedRef.current = false;
               setChatKey((k) => k + 1);
             }}

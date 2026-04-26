@@ -120,8 +120,16 @@ class OnboardingOrchestrator:
     picks it back up via `resume()`.
     """
 
-    def __init__(self, graph, mcp_client: MultiServerMCPClient, tools: list, specialists: dict):
+    def __init__(
+        self,
+        graph,
+        checkpointer,
+        mcp_client: MultiServerMCPClient,
+        tools: list,
+        specialists: dict,
+    ):
         self._graph = graph
+        self._checkpointer = checkpointer
         self._mcp_client = mcp_client
         self._tools = tools
         self._specialists = specialists
@@ -179,6 +187,28 @@ class OnboardingOrchestrator:
         )
         async for event in self._emit_events(Command(resume=decision), config, employee_id):
             yield event
+
+    async def reset_thread(self, employee_id: str) -> None:
+        """
+        Wipe all checkpointed state for an employee's thread. Called by the
+        frontend "Restart" button so the agent's memory matches what the user
+        sees in the UI; otherwise the supervisor sees stale history (including
+        possibly a pending interrupt) and behaves unpredictably.
+        """
+        thread_id = employee_id
+
+        if hasattr(self._checkpointer, "adelete_thread"):
+            await self._checkpointer.adelete_thread(thread_id)
+        elif hasattr(self._checkpointer, "delete_thread"):
+            self._checkpointer.delete_thread(thread_id)
+        else:
+            # Fallback for older MemorySaver: clear internal dicts directly.
+            for attr in ("storage", "writes", "blobs"):
+                d = getattr(self._checkpointer, attr, None)
+                if isinstance(d, dict):
+                    d.pop(thread_id, None)
+
+        logger.info("orchestrator.thread.reset", employee_id=employee_id)
 
     async def get_history(self, employee_id: str) -> list[dict]:
         """Return the visible conversation history for an employee."""
@@ -334,6 +364,7 @@ async def create_orchestrator() -> AsyncIterator[OnboardingOrchestrator]:
 
     yield OnboardingOrchestrator(
         graph=graph,
+        checkpointer=checkpointer,
         mcp_client=mcp_client,
         tools=all_tools,
         specialists=specialists,
