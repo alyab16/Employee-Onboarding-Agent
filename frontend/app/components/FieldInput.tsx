@@ -371,28 +371,27 @@ export function FieldInput({ name, value, onChange, disabled, edited = false }: 
     );
   }
 
-  // Training module dropdown
+  // Training module — read-only. Modules must be completed in order (T1 → T4)
+  // and the backend enforces this, so letting the user re-pick the module from
+  // a dropdown is misleading: it implies they can mark T4 done while on T1.
+  // If the agent picked the wrong module, the right path is Reject + reply.
   if (kind === "module") {
     const current = String(value ?? "").toUpperCase();
+    const meta = TRAINING_MODULES.find((m) => m.id === current);
     return (
-      <FieldRow label={label} edited={edited}>
-        <InputShell icon={<Icon kind="module" />} edited={edited} disabled={disabled}>
-          <select
-            value={current}
-            onChange={(e) => onChange(e.target.value)}
-            disabled={disabled}
-            className="flex-1 bg-transparent outline-none text-[12px] text-stone-800 py-0.5 disabled:cursor-not-allowed"
-          >
-            <option value="" disabled>
-              Pick a module...
-            </option>
-            {TRAINING_MODULES.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.id} — {m.label} ({m.mins} min)
-              </option>
-            ))}
-          </select>
-        </InputShell>
+      <FieldRow label={label} edited={false}>
+        <div className="flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-stone-50 border border-stone-200">
+          <Icon kind="module" />
+          <span className="text-[12px] font-mono text-stone-700">{current}</span>
+          {meta && (
+            <span className="text-[12px] text-stone-500 truncate">
+              — {meta.label} ({meta.mins} min)
+            </span>
+          )}
+          <span className="ml-auto text-[9px] uppercase tracking-wider text-stone-400 flex-shrink-0">
+            read-only
+          </span>
+        </div>
       </FieldRow>
     );
   }
