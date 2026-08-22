@@ -1,6 +1,6 @@
 # Acme Corp - Employee Onboarding Agent
 
-> An autonomous AI agent that guides new employees through their entire onboarding journey — updating profiles across SaaS platforms, completing training, requesting system access, and answering role-specific questions from a RAG-powered company knowledge base.
+> An autonomous AI agent that guides new employees through their entire onboarding journey - updating profiles across SaaS platforms, completing training, requesting system access, and answering role-specific questions from a RAG-powered company knowledge base.
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=flat&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat&logo=fastapi&logoColor=white)
@@ -17,16 +17,16 @@
 
 The **Employee Onboarding Agent** is a full-stack agentic application built as a production-minded prototype. It demonstrates:
 
-- **Multi-agent supervisor architecture** — a LangGraph supervisor routes each user turn to one of four scoped specialist ReAct agents (HR Profile, Training Coach, IT Access, Knowledge Expert). Multi-domain requests can chain specialists in a single turn.
-- **Ask-first specialists** — specialists propose a plan and ask for missing information (timezone, preferred display name, which systems to request) before firing writes. Clear imperatives with full values still execute immediately; the HITL gate is the final review.
-- **Human-in-the-loop for every write** — destructive tools (profile updates, training completions, approval requests, IT tickets) pause the graph via LangGraph `interrupt()`. An inline approval card lets the user review, **edit the tool's arguments**, then approve or reject — the run resumes only after the decision.
-- **MCP-style extensibility** — each SaaS integration is a standalone FastMCP server; adding a new one requires zero changes to the orchestration logic
-- **Production RAG** over 7 internal policy documents — hybrid BM25 keyword + vector semantic search merged via Reciprocal Rank Fusion, contextual chunking (each chunk prefixed with document title and section header), and cosine similarity (HNSW). Automatic rebuild when documents or the embedding provider changes
-- **Evaluation harness** — a 15-case golden dataset graded by four deterministic evaluators plus an LLM-as-judge; exits non-zero on any hard-gate regression so it can plug straight into CI
-- **Persistent state** — all structured data backed by SQLite via SQLModel; interrupt/resume state checkpointed per-employee so approvals survive across separate HTTP turns
-- **Real-time streaming** — SSE delivers specialist handoffs, tool calls, approval requests, and response tokens to the frontend as they happen
-- **Rich markdown rendering** — agent responses rendered with full formatting (headings, lists, code blocks, tables)
-- **LangSmith tracing** — full visibility into every supervisor decision, specialist hop, tool call, and token
+- **Multi-agent supervisor architecture** - a LangGraph supervisor routes each user turn to one of four scoped specialist ReAct agents (HR Profile, Training Coach, IT Access, Knowledge Expert). Multi-domain requests can chain specialists in a single turn.
+- **Ask-first specialists** - specialists propose a plan and ask for missing information (timezone, preferred display name, which systems to request) before firing writes. Clear imperatives with full values still execute immediately; the HITL gate is the final review.
+- **Human-in-the-loop for every write** - destructive tools (profile updates, training completions, approval requests, IT tickets) pause the graph via LangGraph `interrupt()`. An inline approval card lets the user review, **edit the tool's arguments**, then approve or reject - the run resumes only after the decision.
+- **MCP-style extensibility** - each SaaS integration is a standalone FastMCP server; adding a new one requires zero changes to the orchestration logic
+- **Production RAG** over 7 internal policy documents - hybrid BM25 keyword + vector semantic search merged via Reciprocal Rank Fusion, contextual chunking (each chunk prefixed with document title and section header), and cosine similarity (HNSW). Automatic rebuild when documents or the embedding provider changes
+- **Evaluation harness** - a 15-case golden dataset graded by four deterministic evaluators plus an LLM-as-judge; exits non-zero on any hard-gate regression so it can plug straight into CI
+- **Persistent state** - all structured data backed by SQLite via SQLModel; interrupt/resume state checkpointed per-employee so approvals survive across separate HTTP turns
+- **Real-time streaming** - SSE delivers specialist handoffs, tool calls, approval requests, and response tokens to the frontend as they happen
+- **Rich markdown rendering** - agent responses rendered with full formatting (headings, lists, code blocks, tables)
+- **LangSmith tracing** - full visibility into every supervisor decision, specialist hop, tool call, and token
 
 ---
 
@@ -47,12 +47,12 @@ flowchart TB
 
     User(["👤 Employee\nBrowser"]):::ui
 
-    subgraph FE ["Frontend — Next.js 16 · React 19 · Tailwind CSS v4"]
+    subgraph FE ["Frontend - Next.js 16 · React 19 · Tailwind CSS v4"]
         Chat["💬 Chat + Approval UI\nSSE · Markdown"]:::ui
         Selector["👥 Employee\nSelector"]:::ui
     end
 
-    subgraph BE ["Backend — FastAPI"]
+    subgraph BE ["Backend - FastAPI"]
         API["🔌 /chat · /chat/resume\n(SSE)"]:::api
         subgraph GRAPH ["LangGraph Supervisor"]
             direction TB
@@ -72,7 +72,7 @@ flowchart TB
     LLM["🤖 OpenAI GPT\nor Ollama"]:::llm
     LS["📊 LangSmith\nTracing"]:::trace
 
-    subgraph MCP ["MCP Servers — FastMCP (stdio transport)"]
+    subgraph MCP ["MCP Servers - FastMCP (stdio transport)"]
         direction LR
         HR["🏛️ HR Platform"]:::mcp
         SL["💼 Slack"]:::mcp
@@ -102,7 +102,7 @@ flowchart TB
 
 ---
 
-## Supervisor Loop — Multi-Agent Routing
+## Supervisor Loop - Multi-Agent Routing
 
 ```mermaid
 flowchart LR
@@ -124,21 +124,21 @@ flowchart LR
     SUP -->|"goto it_access"| SPEC
     SUP -->|"goto knowledge"| SPEC
     SPEC --> DONE
-    DONE -->|"no — more work"| SUP
+    DONE -->|"no - more work"| SUP
     DONE -->|"yes"| OUT
 ```
 
-The supervisor never speaks to the user — it's a pure router that uses structured
+The supervisor never speaks to the user - it's a pure router that uses structured
 output (`Route{next, reasoning}`) to pick one of four specialists per hop. Each
 specialist is a `create_react_agent` subgraph with a **scoped toolbox**, so tool
 choice stays tight: the Training Coach literally can't accidentally submit an IT
 ticket. Multi-domain requests (*"update my profile AND tell me about PTO"*) are
-handled by chaining specialists — the supervisor re-runs after each one and can
+handled by chaining specialists - the supervisor re-runs after each one and can
 route again or FINISH. A hop cap of 3 prevents routing loops.
 
 ---
 
-## Human-in-the-Loop — Approval Before Every Write
+## Human-in-the-Loop - Approval Before Every Write
 
 ```mermaid
 sequenceDiagram
@@ -158,7 +158,7 @@ sequenceDiagram
     T-->>G: interrupt({ tool, args, action })
     G-->>API: approval_required + awaiting_approval
     API-->>FE: SSE events
-    FE-->>U: Approval card — semantic form fields
+    FE-->>U: Approval card - semantic form fields
     Note over U,FE: User may edit any field inline<br/>(phone, channels, permission set, …)
     U->>FE: Approve (optionally with edits)
     FE->>API: POST /api/chat/resume { approved, edited_args }
@@ -170,7 +170,7 @@ sequenceDiagram
     FE-->>U: "Updated. ✓"
 ```
 
-Eight tools are gated — every `update_*`, `add_to_slack_channels`,
+Eight tools are gated - every `update_*`, `add_to_slack_channels`,
 `assign_salesforce_permission_set`, `complete_training_module`,
 `request_manager_approval`, and `submit_it_ticket`. The wrapper calls
 `interrupt()` before invoking the underlying MCP tool; state is checkpointed
@@ -178,9 +178,9 @@ by the same `MemorySaver` that stores conversation history, so an approval
 request survives across two separate HTTP turns without any server-side
 session state. Rejections are delivered back to the agent as a
 `[SKIPPED] <tool> was not executed. <reason>` tool message, which the
-specialist handles gracefully ("Understood — I'll leave your profile as-is").
+specialist handles gracefully ("Understood - I'll leave your profile as-is").
 
-**Editable arguments.** The approval card renders a **semantic form** — each
+**Editable arguments.** The approval card renders a **semantic form** - each
 arg is matched to the right widget by name: phone numbers get a tel input,
 emails get an email input, channel lists and system lists get chip inputs,
 Salesforce permission sets and training module IDs get curated dropdowns,
@@ -206,14 +206,14 @@ flowchart TD
 
     START(["🚀 Employee begins\nonboarding"]):::start
 
-    subgraph S1 ["Stage 1 — Profile Updates"]
+    subgraph S1 ["Stage 1 - Profile Updates"]
         direction LR
         P1["Update\nSlack Profile"]:::task
         P2["Update\nHR Platform"]:::task
         P3["Update\nSalesforce"]:::task
     end
 
-    subgraph S2 ["Stage 2 — Training Modules (ordered)"]
+    subgraph S2 ["Stage 2 - Training Modules (ordered)"]
         direction LR
         T1["T1 · Company\nPolicies 30min"]:::task
         T2["T2 · Security\nAwareness 45min"]:::task
@@ -222,17 +222,17 @@ flowchart TD
         T1 --> T2 --> T3 --> T4
     end
 
-    subgraph S3 ["Stage 3 — System Access"]
+    subgraph S3 ["Stage 3 - System Access"]
         direction TB
         A1["Get role-based\naccess recommendations"]:::task
         A2["Employee selects\nrequired systems"]:::task
         A3["Submit manager\napproval request"]:::async
-        A4["⏳ Await approval\nasync — agent stays helpful"]:::async
+        A4["⏳ Await approval\nasync - agent stays helpful"]:::async
         A5["Submit IT\naccess ticket"]:::done
         A1 --> A2 --> A3 --> A4 --> A5
     end
 
-    RAG(["🔍 Knowledge Base\nRAG — available\nthroughout all stages"]):::rag
+    RAG(["🔍 Knowledge Base\nRAG - available\nthroughout all stages"]):::rag
 
     START --> S1
     S1 --> S2
@@ -340,7 +340,7 @@ flowchart TB
     classDef chunk fill:#FCE7F3,stroke:#EC4899,color:#831843
     classDef doc fill:#EC4899,stroke:#DB2777,color:#fff,font-weight:bold
 
-    subgraph SQL ["🗄️  SQLite — data.db  (SQLModel)"]
+    subgraph SQL ["🗄️  SQLite - data.db  (SQLModel)"]
         direction LR
         EMP["employee"]:::table
         ACC["accessrecommendation\nrole · level · systems"]:::table
@@ -352,7 +352,7 @@ flowchart TB
         SFU["salesforceuser"]:::table
     end
 
-    subgraph VEC ["🔮  ChromaDB — chroma_db/  (LangChain)"]
+    subgraph VEC ["🔮  ChromaDB - chroma_db/  (LangChain)"]
         direction LR
         COL["company_knowledge\ncollection"]:::doc
         subgraph Docs ["Source Documents (knowledge_docs/)"]
@@ -454,7 +454,7 @@ EmployeeOnboardingAgent/
     │   └── admin.py                   # Employees · MCP servers · specialists · DB reset
     │
     ├── utils/
-    │   └── logger.py                  # structlog — console + rotating file handler
+    │   └── logger.py                  # structlog - console + rotating file handler
     │
     ├── logs/                          # Auto-created; app.log rotates at 10 MB
     ├── data.db                        # SQLite database (auto-created)
@@ -469,7 +469,7 @@ EmployeeOnboardingAgent/
 
 Two supported paths: **Docker** (fastest, one command) or **local development** (hot reload, direct access to `uv` / `npm`). Pick whichever suits your workflow.
 
-### Option A — Docker (recommended)
+### Option A - Docker (recommended)
 
 Spin up the full stack (backend, frontend, and persistent volumes) with one command.
 
@@ -478,7 +478,7 @@ Spin up the full stack (backend, frontend, and persistent volumes) with one comm
 ```bash
 # 1. Configure the backend environment
 cp backend/.env.example backend/.env
-# Edit backend/.env — add OPENAI_API_KEY, or configure Ollama settings
+# Edit backend/.env - add OPENAI_API_KEY, or configure Ollama settings
 
 # 2. Build and start both services
 docker compose up --build
@@ -495,11 +495,11 @@ On first boot the backend seeds the SQLite database, indexes the 7 knowledge doc
 | `backend`  | 8000 | `onboarding-backend:latest`  |
 | `frontend` | 3000 | `onboarding-frontend:latest` |
 
-**Persistent volumes** — survive `docker compose down`, wiped by `docker compose down -v`.
+**Persistent volumes** - survive `docker compose down`, wiped by `docker compose down -v`.
 
 | Volume           | Mounted at        | Contents                                    |
 |------------------|-------------------|---------------------------------------------|
-| `backend-data`   | `/app/data`       | SQLite DB — employees, approvals, tickets   |
+| `backend-data`   | `/app/data`       | SQLite DB - employees, approvals, tickets   |
 | `backend-chroma` | `/app/chroma_db`  | ChromaDB index over `knowledge_docs/`       |
 | `backend-logs`   | `/app/logs`       | Structured JSON application logs            |
 
@@ -534,7 +534,7 @@ docker compose up --build backend       # rebuild just the backend
 
 ---
 
-### Option B — Local development
+### Option B - Local development
 
 #### Prerequisites
 
@@ -542,7 +542,7 @@ docker compose up --build backend       # rebuild just the backend
 - Node.js 20+
 - An OpenAI API key **or** [Ollama](https://ollama.com) running locally
 
-### 1 — Backend
+### 1 - Backend
 
 ```bash
 cd backend
@@ -557,7 +557,7 @@ uv init
 # Install dependencies
 uv add -r requirements.txt
 
-# If using Ollama — pull required models
+# If using Ollama - pull required models
 ollama pull llama3.1:8b        # chat model
 ollama pull nomic-embed-text   # embedding model
 
@@ -571,7 +571,7 @@ The first startup will:
 3. Spawn 5 FastMCP subprocesses (HR, Slack, Salesforce, Training, IT)
 4. Start the FastAPI server on `http://localhost:8000`
 
-### 2 — Frontend
+### 2 - Frontend
 
 ```bash
 cd frontend
@@ -590,7 +590,7 @@ Open [http://localhost:3000](http://localhost:3000), select an employee, and sta
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | — | OpenAI key. If unset, Ollama is used |
+| `OPENAI_API_KEY` | - | OpenAI key. If unset, Ollama is used |
 | `MODEL_ID` | `gpt-4o-mini` | OpenAI model ID |
 | `OLLAMA_MODEL` | `llama3.1:8b` | Ollama chat model |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
@@ -598,8 +598,8 @@ Open [http://localhost:3000](http://localhost:3000), select an employee, and sta
 | `CORS_ORIGINS` | `http://localhost:3000` | Allowed frontend origins |
 | `MAX_TOKENS` | `4096` | Max tokens per LLM response |
 | `AUTO_APPROVE_SECONDS` | `30` | Seconds before manager approval auto-approves (demo) |
-| `LANGCHAIN_TRACING_V2` | — | Set to `true` to enable LangSmith |
-| `LANGCHAIN_API_KEY` | — | LangSmith API key |
+| `LANGCHAIN_TRACING_V2` | - | Set to `true` to enable LangSmith |
+| `LANGCHAIN_API_KEY` | - | LangSmith API key |
 | `LANGCHAIN_PROJECT` | `employee-onboarding-agent` | LangSmith project name |
 
 ### Frontend (`.env.local`)
@@ -632,7 +632,7 @@ Open [http://localhost:3000](http://localhost:3000), select an employee, and sta
 { "type": "tool_call",         "tool": "get_employee_profile",
   "server": "hr",              "input": { "employee_id": "emp001" } }
 { "type": "tool_result",       "tool": "get_employee_profile",
-  "output": "HR Platform — Employee Profile..." }
+  "output": "HR Platform - Employee Profile..." }
 { "type": "approval_required", "interrupt_id": "...",       // HITL
   "tool": "update_slack_profile", "server": "slack",
   "action": "Update Slack profile fields",
@@ -648,7 +648,7 @@ Resume an interrupted run by POSTing to `/api/chat/resume`:
 { "employee_id": "emp001",
   "approved":    true,
   "reason":      "",
-  "edited_args": { }       // optional — override the agent's tool arguments
+  "edited_args": { }       // optional - override the agent's tool arguments
 }
 ```
 
@@ -696,7 +696,7 @@ MCP_SERVERS_CONFIG = {
 }
 ```
 
-The agent discovers the new tools automatically on next startup — no other changes needed.
+The agent discovers the new tools automatically on next startup - no other changes needed.
 
 ---
 
@@ -704,7 +704,7 @@ The agent discovers the new tools automatically on next startup — no other cha
 
 Drop any `.md` file into `backend/knowledge_docs/`. The vector store automatically detects the change via content hash on the next startup and re-indexes.
 
-Switching between OpenAI and Ollama embeddings also triggers an automatic rebuild — no manual cleanup required.
+Switching between OpenAI and Ollama embeddings also triggers an automatic rebuild - no manual cleanup required.
 
 ---
 
@@ -735,7 +735,7 @@ edges. Each case is graded by five evaluators:
 | `tool_trajectory`   | Every required tool was called                           | ✅        |
 | `tool_choice`       | No forbidden tool was called                             | ✅        |
 | `response_contains` | Final response includes the required substrings         | ✅        |
-| `response_quality`  | LLM-as-judge grade (1–5) against a per-case rubric       | —         |
+| `response_quality`  | LLM-as-judge grade (1–5) against a per-case rubric       | -         |
 
 Every case runs against a fresh LangGraph thread id so cases can't leak state
 into each other; HITL interrupts are auto-approved by the runner. The runner
@@ -750,7 +750,7 @@ uv run python -m evals.run_evals --json evals/latest.json
 ```
 
 If `LANGCHAIN_TRACING_V2=true` is set, every case is also traced to LangSmith
-under the configured project — invaluable for diagnosing failures. See
+under the configured project - invaluable for diagnosing failures. See
 [`backend/evals/README.md`](backend/evals/README.md) for adding new cases.
 
 ---
@@ -761,7 +761,7 @@ under the configured project — invaluable for diagnosing failures. See
 |---|---|
 | **Console logs** | Pretty-printed structured logs per request |
 | **`logs/app.log`** | Rotating JSON logs (10 MB × 5 files) |
-| **LangSmith** | Full agent traces — every LLM call, tool call, token count, latency, and conversation thread |
+| **LangSmith** | Full agent traces - every LLM call, tool call, token count, latency, and conversation thread |
 
 Enable LangSmith by adding to `.env`:
 ```env
