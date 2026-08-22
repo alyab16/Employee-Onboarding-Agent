@@ -1,4 +1,4 @@
-# Acme Corp — Employee Onboarding Agent
+# Acme Corp - Employee Onboarding Agent
 
 > An autonomous AI agent that guides new employees through their entire onboarding journey — updating profiles across SaaS platforms, completing training, requesting system access, and answering role-specific questions from a RAG-powered company knowledge base.
 
