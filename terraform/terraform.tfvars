@@ -10,7 +10,7 @@ auto_approve_seconds   = 30
 lambda_memory_mb            = 2048
 lambda_timeout              = 300
 lambda_ephemeral_storage_mb = 1024
-lambda_reserved_concurrency = 2
+lambda_reserved_concurrency = -1
 log_retention_days          = 14
 
 enable_warmer           = true
