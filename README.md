@@ -12,7 +12,7 @@
 ![LangSmith](https://img.shields.io/badge/LangSmith-Tracing-14B8A6?style=flat)
 ![AWS](https://img.shields.io/badge/AWS-Lambda%20%7C%20Bedrock%20%7C%20CloudFront-FF9900?style=flat&logo=amazonwebservices&logoColor=white)
 
-**Live demo:** [https://d2j7378c90nw96.cloudfront.net](https://d2j7378c90nw96.cloudfront.net)
+**Live demo:** [https://d3vzhwby5q4nxj.cloudfront.net/](https://d3vzhwby5q4nxj.cloudfront.net/)
 
 ---
 
