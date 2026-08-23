@@ -211,14 +211,6 @@ resource "aws_lambda_function_url" "api" {
   # Without RESPONSE_STREAM the adapter buffers the whole SSE body and the UI
   # renders one lump of text at the end of the turn instead of live deltas.
   invoke_mode = "RESPONSE_STREAM"
-
-  cors {
-    allow_origins     = split(",", local.cors_origins)
-    allow_methods     = ["GET", "POST", "DELETE"]
-    allow_headers     = ["content-type"]
-    max_age           = 86400
-    allow_credentials = false
-  }
 }
 
 #############################################################################
