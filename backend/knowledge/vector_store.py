@@ -39,13 +39,26 @@ COLLECTION_METADATA = {"hnsw:space": "cosine"}
 
 def _current_provider() -> str:
     """Return a stable string identifying the current embedding provider + model."""
+    bedrock_embed = os.getenv("BEDROCK_EMBED_MODEL_ID")
+    if bedrock_embed:
+        return f"bedrock:{bedrock_embed}"
     if os.getenv("OPENAI_API_KEY"):
         return "openai:text-embedding-3-small"
     return f"ollama:{os.getenv('OLLAMA_EMBED_MODEL', 'nomic-embed-text')}"
 
 
 def _get_embeddings():
-    """Return embeddings — OpenAI if key present, Ollama nomic-embed-text otherwise."""
+    """Return embeddings — Bedrock, then OpenAI if key present, else Ollama."""
+    bedrock_embed = os.getenv("BEDROCK_EMBED_MODEL_ID")
+    if bedrock_embed:
+        from langchain_aws import BedrockEmbeddings
+
+        logger.info("vector_store.embeddings", provider="bedrock", model=bedrock_embed)
+        return BedrockEmbeddings(
+            model_id=bedrock_embed,
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+        )
+
     if os.getenv("OPENAI_API_KEY"):
         from langchain_openai import OpenAIEmbeddings
         logger.info("vector_store.embeddings", provider="openai", model="text-embedding-3-small")

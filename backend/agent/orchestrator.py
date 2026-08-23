@@ -77,8 +77,45 @@ TOOL_TO_SERVER: dict[str, str] = {
 }
 
 
+def _build_checkpointer():
+    """
+    DynamoDB when CHECKPOINT_TABLE is set, else the in-process MemorySaver.
+
+    MemorySaver keeps graph state in RAM, which ties a HITL approval to the exact
+    process that issued it — fine for local dev and Docker, impossible on Lambda
+    where /api/chat and /api/chat/resume can land in different execution
+    environments. DynamoDBSaver moves that state out of the process.
+    """
+    table = os.getenv("CHECKPOINT_TABLE")
+    if table:
+        from langgraph_checkpoint_aws import DynamoDBSaver
+
+        logger.info("checkpointer.provider", provider="dynamodb", table=table)
+        return DynamoDBSaver(
+            table_name=table,
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+        )
+
+    logger.info("checkpointer.provider", provider="memory")
+    return MemorySaver()
+
+
 def _build_llm(model_id: str, max_tokens: int):
-    """OpenAI if OPENAI_API_KEY is set, else Ollama."""
+    """Bedrock if BEDROCK_MODEL_ID is set, else OpenAI if OPENAI_API_KEY is set, else Ollama."""
+    bedrock_model = os.getenv("BEDROCK_MODEL_ID")
+    if bedrock_model:
+        # Bedrock authenticates through the function's IAM role, so no API key
+        # ever enters the container. Used by the Lambda deployment.
+        from langchain_aws import ChatBedrockConverse
+
+        logger.info("llm.provider", provider="bedrock", model=bedrock_model)
+        return ChatBedrockConverse(
+            model=bedrock_model,
+            temperature=0,
+            max_tokens=max_tokens,
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+        )
+
     if os.getenv("OPENAI_API_KEY"):
         from langchain_openai import ChatOpenAI
 
@@ -203,10 +240,21 @@ class OnboardingOrchestrator:
             self._checkpointer.delete_thread(thread_id)
         else:
             # Fallback for older MemorySaver: clear internal dicts directly.
+            cleared = False
             for attr in ("storage", "writes", "blobs"):
                 d = getattr(self._checkpointer, attr, None)
                 if isinstance(d, dict):
                     d.pop(thread_id, None)
+                    cleared = True
+            if not cleared:
+                # A remote checkpointer with no delete support would silently keep
+                # stale history here, which is exactly the bug reset_thread exists
+                # to prevent — say so rather than pretending the reset worked.
+                logger.warning(
+                    "orchestrator.thread.reset_unsupported",
+                    checkpointer=type(self._checkpointer).__name__,
+                    employee_id=employee_id,
+                )
 
         logger.info("orchestrator.thread.reset", employee_id=employee_id)
 
@@ -343,7 +391,7 @@ async def create_orchestrator() -> AsyncIterator[OnboardingOrchestrator]:
     max_tokens = int(os.getenv("MAX_TOKENS", "4096"))
 
     llm = _build_llm(model_id, max_tokens)
-    checkpointer = MemorySaver()
+    checkpointer = _build_checkpointer()
 
     logger.info("orchestrator.mcp.starting", servers=list(MCP_SERVERS_CONFIG.keys()))
     mcp_client = MultiServerMCPClient(MCP_SERVERS_CONFIG)
