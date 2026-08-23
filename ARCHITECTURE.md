@@ -3,7 +3,8 @@
 A multi-agent HR onboarding assistant for "Acme Corp". A LangGraph supervisor routes each
 user turn to one of four scoped specialist agents. The specialists act on five simulated
 enterprise systems exposed as FastMCP servers, plus an in-process RAG knowledge base. Every
-write action is gated behind an explicit human approval.
+write action is gated behind an explicit human approval. The same application runs locally
+or as a Terraform-managed AWS serverless deployment.
 
 ---
 
@@ -40,9 +41,41 @@ flowchart TD
     RET --> DOCS
 ```
 
-**LLM provider**: OpenAI (`MODEL_ID`, default `gpt-4o-mini`) when `OPENAI_API_KEY` is set,
-otherwise Ollama (`OLLAMA_MODEL`, default `llama3.1:8b`). Embeddings follow the same switch:
-`text-embedding-3-small` vs. `nomic-embed-text`. Optional LangSmith tracing.
+**Model provider selection**: Amazon Bedrock (`BEDROCK_MODEL_ID`) takes precedence in AWS.
+Otherwise the backend uses OpenAI (`MODEL_ID`, default `gpt-4o-mini`) when
+`OPENAI_API_KEY` is set, then falls back to Ollama (`OLLAMA_MODEL`, default
+`llama3.1:8b`). Embeddings follow the same environment-driven pattern: Bedrock Titan,
+OpenAI `text-embedding-3-small`, or Ollama `nomic-embed-text`. LangSmith tracing is optional.
+
+### 1.1 AWS deployment topology
+
+```mermaid
+flowchart LR
+    B([Browser]) --> CF[CloudFront]
+    CF --> S3[(Private S3 bucket<br/>static Next.js export)]
+    B -->|HTTPS + response-streaming SSE| FU[Lambda Function URL<br/>authorization NONE]
+    FU --> L[Lambda container<br/>FastAPI + LangGraph + 5 MCP children]
+    ECR[(ECR images)] --> L
+    L --> BR[Amazon Bedrock<br/>Nova chat + Titan embeddings]
+    L --> DDB[(DynamoDB<br/>LangGraph checkpoints)]
+    L --> TMP[(/tmp<br/>SQLite + ChromaDB + BM25)]
+    EB[EventBridge warmer] --> L
+    L --> CW[CloudWatch Logs]
+    GA[GitHub Actions<br/>OIDC from main] --> TF[Terraform]
+    TF --> CF & S3 & FU & L & ECR & DDB & EB & CW
+```
+
+CloudFront accesses the S3 origin through Origin Access Control, so the bucket remains
+private. The frontend calls the public Lambda Function URL directly; FastAPI is the sole
+CORS layer. The URL uses Lambda response streaming so SSE deltas reach the browser without
+API Gateway buffering. The image is built for `linux/amd64`, tagged with the Git commit SHA,
+stored in ECR, and referenced by Lambda.
+
+`CHECKPOINT_TABLE` selects `DynamoDBSaver`, moving conversation and interrupt state outside
+the Lambda process. Without that variable (the local path), the graph uses `MemorySaver`.
+The EventBridge warmer invokes `/health` every five minutes by default to reduce—though not
+eliminate—the 60–90 second cold start caused by importing the stack, spawning five MCP
+subprocesses, discovering 18 MCP tools, and rebuilding the local RAG index.
 
 ---
 
@@ -245,8 +278,8 @@ Three outcomes:
   telling the model the changed values are deliberate user corrections. Without this, the
   model sees arguments differing from what it sent and reports a phantom tool failure.
 
-Interrupt state is checkpointed by `MemorySaver` under `thread_id = employee_id`, so an
-approval survives across separate HTTP requests. The frontend Restart button calls
+Interrupt state is checkpointed under `thread_id = employee_id` by `DynamoDBSaver` on AWS
+or `MemorySaver` locally, so an approval survives across separate HTTP requests. The frontend Restart button calls
 `DELETE /api/chat/history`, which wipes the thread — otherwise a stale pending interrupt
 would silently swallow the next turn.
 
@@ -259,10 +292,18 @@ would silently swallow the next turn.
 
 ## 5. Data layer
 
-Single SQLite file (`data.db`) shared by the FastAPI process and all MCP subprocesses. The
-orchestrator forwards the full parent environment (`os.environ.copy()`) into each stdio
-subprocess so `DB_PATH` / `CHROMA_PATH` propagate — without it each child would open its own
-SQLite file at the default path and the seeded DB would be disjoint from the tools' DB.
+The FastAPI process and all MCP subprocesses share one SQLite file (`data.db`) within a
+single application instance. The orchestrator forwards the full parent environment
+(`os.environ.copy()`) into each stdio subprocess so `DB_PATH` / `CHROMA_PATH` propagate —
+without it each child would open its own file and the seeded DB would be disjoint from the
+tools' DB.
+
+Locally, Docker volumes or files under `backend/` make SQLite and Chroma persistent. On
+Lambda, Terraform sets both paths under `/tmp`: the files survive warm invocations in one
+execution environment but can disappear on recycle, and concurrent execution environments
+can hold divergent mock records. This is acceptable only because the SaaS systems are
+simulated. LangGraph conversation and pending-approval checkpoints do **not** share this
+limitation on AWS; they live in DynamoDB.
 
 **8 SQLModel tables**: `Employee`, `AccessRecommendation`, `TrainingModule`,
 `TrainingCompletion`, `ApprovalRequest`, `ITTicket`, `SlackProfile`, `SalesforceUser`.
@@ -367,7 +408,44 @@ over-eager tool use the single most heavily tested failure mode.
    that happens to hold the tool.
 4. **Approval edits are annotated, not silent.** The `[HITL NOTE: ...]` prefix exists because
    silently substituted arguments read to the model as a tool malfunction.
-5. **Checkpointing at the outer graph only.** Specialists are stateless subgraphs; a single
-   `MemorySaver` keyed by `employee_id` keeps interrupt/resume coherent across the hierarchy.
+5. **Checkpointing at the outer graph only.** Specialists are stateless subgraphs; one
+   environment-selected saver (`DynamoDBSaver` on AWS, `MemorySaver` locally), keyed by
+   `employee_id`, keeps interrupt/resume coherent across the hierarchy.
 6. **Knowledge runs in-process.** A deliberate departure from the MCP pattern, forced by
    ChromaDB/SQLite locking on Windows.
+
+---
+
+## 8. Deployment, security, and operating boundaries
+
+The public repository is the only deployment source. `.github/workflows/deploy.yml` runs on
+pushes to `main` and may also be dispatched manually to an allowed GitHub environment. The
+GitHub environment rule and the IAM OIDC trust both restrict assumption of
+`onboarding-github-actions` to the intended repository, `refs/heads/main`, and `dev`,
+`test`, or `prod`. The workflow exchanges GitHub's OIDC token for short-lived AWS
+credentials; no long-lived access key belongs in GitHub.
+
+Terraform state is remote and account-level: the encrypted S3 state bucket is
+`onboarding-terraform-state-<account-id>` and the DynamoDB lock table is
+`onboarding-terraform-locks`. Environment stacks use separate state keys/workspaces. ECR is
+created first, then the image is pushed, then the full stack is applied; the Function URL
+output is compiled into the static frontend before its files are synchronized to S3.
+
+Important boundaries:
+
+- The Function URL has `authorization_type = "NONE"`. CORS restricts participating browsers
+  but does not authenticate callers; the URL and all admin endpoints are public.
+- `employee_id` selects mock data and is not an authorization mechanism. Real integrations
+  require identity, RBAC, tenant isolation, input limits, audit retention, and secrets
+  management.
+- The current quota-compatible setting is `lambda_reserved_concurrency = -1`, so reserved
+  concurrency is not a spend cap. Add rate limiting, AWS Budgets/alarms, and a deliberate
+  concurrency policy before production use.
+- Bedrock inference, Lambda duration, the five-minute warmer, CloudWatch ingestion/retention,
+  ECR, DynamoDB, S3, and CloudFront all have usage-based cost. The warmer intentionally
+  spends a small amount to improve first-request latency.
+- A deployment rollback re-runs a known-good commit/image tag against the existing Terraform
+  backend. Repository migration never requires destroying or recreating the stack.
+- The destroy workflow is manual and confirmation-gated. It removes the selected
+  environment—including its checkpoint table—but intentionally retains the account-level
+  Terraform state bucket and lock table.

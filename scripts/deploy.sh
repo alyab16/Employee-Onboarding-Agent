@@ -4,7 +4,7 @@
 #
 #   ./scripts/deploy.sh <dev|test|prod> [project_name]
 #
-# Requires: aws cli, terraform >= 1.5, docker, node 20, and credentials for the
+# Requires: aws cli, terraform >= 1.5, docker, node 24, and credentials for the
 # target account. Run scripts/bootstrap.sh once before the first deploy.
 #
 # Ordering here is not arbitrary:
