@@ -30,6 +30,7 @@ from agent.hitl import wrap_tools
 from agent.specialists import build_specialists, SPECIALIST_LABELS
 from agent.supervisor import build_supervisor_graph
 from utils.logger import get_logger
+from utils.reasoning import ThinkingTagFilter, strip_thinking
 
 
 logger = get_logger("orchestrator")
@@ -273,9 +274,12 @@ class OnboardingOrchestrator:
                     text = text.split("\n\n", 1)[-1]
                 history.append({"role": "user", "content": text})
             elif isinstance(msg, AIMessage) and msg.content:
+                visible_content = strip_thinking(_extract_text(msg.content))
+                if not visible_content:
+                    continue
                 history.append({
                     "role": "assistant",
-                    "content": msg.content,
+                    "content": visible_content,
                     "specialist": msg.additional_kwargs.get("specialist") if msg.additional_kwargs else None,
                 })
         return history
@@ -284,6 +288,7 @@ class OnboardingOrchestrator:
 
     async def _emit_events(self, graph_input: Any, config: dict, employee_id: str) -> AsyncIterator[dict]:
         last_specialist: str | None = None
+        text_filters: dict[str, ThinkingTagFilter] = {}
 
         try:
             async for event in self._graph.astream_events(graph_input, config, version="v2"):
@@ -309,7 +314,19 @@ class OnboardingOrchestrator:
                     chunk = event["data"].get("chunk")
                     text = _extract_text(getattr(chunk, "content", "")) if chunk else ""
                     if text:
-                        yield {"type": "text_delta", "content": text}
+                        run_id = str(event.get("run_id", ""))
+                        text_filter = text_filters.setdefault(run_id, ThinkingTagFilter())
+                        visible_text = text_filter.feed(text)
+                        if visible_text:
+                            yield {"type": "text_delta", "content": visible_text}
+
+                elif kind == "on_chat_model_end":
+                    run_id = str(event.get("run_id", ""))
+                    text_filter = text_filters.pop(run_id, None)
+                    if text_filter:
+                        visible_text = text_filter.finish()
+                        if visible_text:
+                            yield {"type": "text_delta", "content": visible_text}
 
                 elif kind == "on_tool_start":
                     tool_name = event.get("name", "")
