@@ -30,6 +30,7 @@ from agent.hitl import wrap_tools
 from agent.specialists import build_specialists, SPECIALIST_LABELS
 from agent.supervisor import build_supervisor_graph
 from utils.logger import get_logger
+from utils.reasoning import ThinkingTagFilter, strip_thinking
 
 
 logger = get_logger("orchestrator")
@@ -77,8 +78,45 @@ TOOL_TO_SERVER: dict[str, str] = {
 }
 
 
+def _build_checkpointer():
+    """
+    DynamoDB when CHECKPOINT_TABLE is set, else the in-process MemorySaver.
+
+    MemorySaver keeps graph state in RAM, which ties a HITL approval to the exact
+    process that issued it — fine for local dev and Docker, impossible on Lambda
+    where /api/chat and /api/chat/resume can land in different execution
+    environments. DynamoDBSaver moves that state out of the process.
+    """
+    table = os.getenv("CHECKPOINT_TABLE")
+    if table:
+        from langgraph_checkpoint_aws import DynamoDBSaver
+
+        logger.info("checkpointer.provider", provider="dynamodb", table=table)
+        return DynamoDBSaver(
+            table_name=table,
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+        )
+
+    logger.info("checkpointer.provider", provider="memory")
+    return MemorySaver()
+
+
 def _build_llm(model_id: str, max_tokens: int):
-    """OpenAI if OPENAI_API_KEY is set, else Ollama."""
+    """Bedrock if BEDROCK_MODEL_ID is set, else OpenAI if OPENAI_API_KEY is set, else Ollama."""
+    bedrock_model = os.getenv("BEDROCK_MODEL_ID")
+    if bedrock_model:
+        # Bedrock authenticates through the function's IAM role, so no API key
+        # ever enters the container. Used by the Lambda deployment.
+        from langchain_aws import ChatBedrockConverse
+
+        logger.info("llm.provider", provider="bedrock", model=bedrock_model)
+        return ChatBedrockConverse(
+            model=bedrock_model,
+            temperature=0,
+            max_tokens=max_tokens,
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+        )
+
     if os.getenv("OPENAI_API_KEY"):
         from langchain_openai import ChatOpenAI
 
@@ -203,10 +241,21 @@ class OnboardingOrchestrator:
             self._checkpointer.delete_thread(thread_id)
         else:
             # Fallback for older MemorySaver: clear internal dicts directly.
+            cleared = False
             for attr in ("storage", "writes", "blobs"):
                 d = getattr(self._checkpointer, attr, None)
                 if isinstance(d, dict):
                     d.pop(thread_id, None)
+                    cleared = True
+            if not cleared:
+                # A remote checkpointer with no delete support would silently keep
+                # stale history here, which is exactly the bug reset_thread exists
+                # to prevent — say so rather than pretending the reset worked.
+                logger.warning(
+                    "orchestrator.thread.reset_unsupported",
+                    checkpointer=type(self._checkpointer).__name__,
+                    employee_id=employee_id,
+                )
 
         logger.info("orchestrator.thread.reset", employee_id=employee_id)
 
@@ -225,9 +274,12 @@ class OnboardingOrchestrator:
                     text = text.split("\n\n", 1)[-1]
                 history.append({"role": "user", "content": text})
             elif isinstance(msg, AIMessage) and msg.content:
+                visible_content = strip_thinking(_extract_text(msg.content))
+                if not visible_content:
+                    continue
                 history.append({
                     "role": "assistant",
-                    "content": msg.content,
+                    "content": visible_content,
                     "specialist": msg.additional_kwargs.get("specialist") if msg.additional_kwargs else None,
                 })
         return history
@@ -236,6 +288,7 @@ class OnboardingOrchestrator:
 
     async def _emit_events(self, graph_input: Any, config: dict, employee_id: str) -> AsyncIterator[dict]:
         last_specialist: str | None = None
+        text_filters: dict[str, ThinkingTagFilter] = {}
 
         try:
             async for event in self._graph.astream_events(graph_input, config, version="v2"):
@@ -261,7 +314,19 @@ class OnboardingOrchestrator:
                     chunk = event["data"].get("chunk")
                     text = _extract_text(getattr(chunk, "content", "")) if chunk else ""
                     if text:
-                        yield {"type": "text_delta", "content": text}
+                        run_id = str(event.get("run_id", ""))
+                        text_filter = text_filters.setdefault(run_id, ThinkingTagFilter())
+                        visible_text = text_filter.feed(text)
+                        if visible_text:
+                            yield {"type": "text_delta", "content": visible_text}
+
+                elif kind == "on_chat_model_end":
+                    run_id = str(event.get("run_id", ""))
+                    text_filter = text_filters.pop(run_id, None)
+                    if text_filter:
+                        visible_text = text_filter.finish()
+                        if visible_text:
+                            yield {"type": "text_delta", "content": visible_text}
 
                 elif kind == "on_tool_start":
                     tool_name = event.get("name", "")
@@ -343,7 +408,7 @@ async def create_orchestrator() -> AsyncIterator[OnboardingOrchestrator]:
     max_tokens = int(os.getenv("MAX_TOKENS", "4096"))
 
     llm = _build_llm(model_id, max_tokens)
-    checkpointer = MemorySaver()
+    checkpointer = _build_checkpointer()
 
     logger.info("orchestrator.mcp.starting", servers=list(MCP_SERVERS_CONFIG.keys()))
     mcp_client = MultiServerMCPClient(MCP_SERVERS_CONFIG)

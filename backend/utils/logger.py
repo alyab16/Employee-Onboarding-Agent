@@ -5,17 +5,20 @@ Logging setup: structlog for structured output.
 """
 
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import structlog
 
-LOGS_DIR = Path(__file__).parent.parent / "logs"
+# LOG_DIR is overridable because Lambda mounts the image filesystem read-only —
+# only /tmp is writable there, so the deployment sets LOG_DIR=/tmp/logs.
+LOGS_DIR = Path(os.getenv("LOG_DIR") or (Path(__file__).parent.parent / "logs"))
 
 
 def setup_logging() -> None:
-    LOGS_DIR.mkdir(exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
     shared_processors = [
         structlog.stdlib.add_logger_name,

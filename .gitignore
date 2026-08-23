@@ -41,10 +41,13 @@ Thumbs.db
 .aws/
 
 backend/chroma_db/
-backend/pyproject.toml
-backend/uv.lock
 backend/data.db
+
+# pyproject.toml and uv.lock are deliberately NOT ignored. Dockerfile.lambda
+# and Dockerfile both `COPY pyproject.toml uv.lock ./`, so a CI checkout that
+# lacks them fails at build time — and an uncommitted lockfile means CI cannot
+# reproduce the dependency set the image was tested with.
 solution_design.synctex.gz
 solution_design.out
 solution_design.aux
-.claude/settings.local.json
+**/.claude/settings.local.json

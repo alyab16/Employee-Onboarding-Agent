@@ -1,0 +1,64 @@
+# syntax=docker/dockerfile:1.7
+#
+# Lambda container image for the onboarding backend.
+#
+# Differs from ./Dockerfile in three ways, all forced by the Lambda runtime:
+#
+#   1. AWS Lambda Web Adapter is copied into /opt/extensions. It implements the
+#      Lambda Runtime API and proxies invocations to uvicorn as ordinary HTTP,
+#      so main.py needs no handler and no Mangum. Unlike Mangum it supports
+#      response streaming, which is what keeps the SSE `text_delta` frames
+#      flowing instead of arriving in one lump at the end of the turn.
+#   2. Every writable path moves to /tmp — the image filesystem is read-only.
+#      SQLite, the Chroma index and the rotating log file all live there and are
+#      rebuilt on each cold start (init_vector_store() re-embeds 7 markdown docs,
+#      seed_all() re-seeds the tables). Both are cheap; neither needs a volume.
+#   3. No HEALTHCHECK — Lambda does not run one. AWS_LWA_READINESS_CHECK_PATH
+#      is the equivalent, and the adapter polls it until lifespan startup
+#      finishes (MCP subprocess spawn + tool discovery + index build).
+
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    PATH="/app/.venv/bin:$PATH"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Lambda Web Adapter — an extension, so it works with any base image.
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1 /lambda-adapter /opt/extensions/lambda-adapter
+
+COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /uvx /usr/local/bin/
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev
+
+COPY . .
+
+# --- Lambda Web Adapter configuration -------------------------------------
+#   response_stream : stream SSE back through the Function URL
+#   readiness check : wait for lifespan startup (~60-90s cold start)
+ENV AWS_LWA_INVOKE_MODE=response_stream \
+    AWS_LWA_READINESS_CHECK_PATH=/health \
+    AWS_LWA_READINESS_CHECK_PROTOCOL=http \
+    PORT=8000
+
+# --- Writable paths (only /tmp is writable on Lambda) ---------------------
+ENV DB_PATH=/tmp/data/data.db \
+    CHROMA_PATH=/tmp/chroma_db \
+    LOG_DIR=/tmp/logs \
+    HOST=0.0.0.0
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

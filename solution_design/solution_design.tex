@@ -49,7 +49,7 @@
   \vspace{3pt}\rule{\linewidth}{0.4pt}\\
   {\footnotesize\color{gray!70}%
    \textbf{Stack:} Python\,3.13 · FastAPI · LangGraph (supervisor + HITL) ·
-   LangChain · ChromaDB · FastMCP · Next.js\,16 · SQLite · OpenAI GPT / Ollama}%
+   LangChain · ChromaDB · FastMCP · Next.js\,16 · AWS Lambda · Bedrock · DynamoDB}%
 }
 
 % =============================================================================
@@ -59,7 +59,7 @@
 \begin{center}
   {\large\bfseries Employee Onboarding AI Agent}\\[1.5pt]
   {\small\color{accent} Solution Design Document}
-  \hspace{1em}{\footnotesize\color{gray!60}Acme Corp · April 2026}
+  \hspace{1em}{\footnotesize\color{gray!60}Acme Corp · August 2026}
 \end{center}
 \vspace{-2pt}\rule{\linewidth}{0.8pt}\vspace{3pt}
 
@@ -69,13 +69,13 @@
 \begin{center}
 \begin{tikzpicture}
   % ── Nodes ──────────────────────────────────────────────────────────────────
-  \node[bb=cteal,   text width=1.55cm] at (0,   0)    (fe)     {Next.js 16\\Browser};
-  \node[bb=cblue,   text width=1.55cm] at (2.7, 0)    (api)    {FastAPI\\REST + SSE};
+  \node[bb=cteal,   text width=1.55cm] at (0,   0)    (fe)     {CloudFront + S3\\Next.js 16};
+  \node[bb=cblue,   text width=1.55cm] at (2.7, 0)    (api)    {Lambda URL\\FastAPI + SSE};
   \node[bb=cpurple, text width=2.5cm]  at (5.9, 0)    (agent)  {LangGraph\\Supervisor + 4\\Specialists · HITL};
   \node[bb=corange, text width=3.1cm]  at (9.7, 0.85) (mcp)    {5 × FastMCP Servers\\HR · IT · Slack · SF · Training};
-  \node[bb=cblue,   text width=2.8cm]  at (9.7,-0.85) (rag)    {In-Process Knowledge Tools\\BM25 + Vector RAG (RRF)};
-  \node[bb=cgray,   text width=1.65cm] at (13.3, 0.85)(sqlite) {SQLite\\State DB};
-  \node[bb=cgray,   text width=1.75cm] at (13.3,-0.85)(chroma) {ChromaDB\\Cosine / HNSW};
+  \node[bb=cblue,   text width=2.8cm]  at (9.7,-0.85) (rag)    {In-Process Knowledge Tools\\Chroma + BM25 (RRF)};
+  \node[bb=cgray,   text width=1.65cm] at (13.3, 0.85)(sqlite) {SQLite /tmp\\Mock State};
+  \node[bb=cgray,   text width=1.75cm] at (13.3,-0.85)(chroma) {DynamoDB\\Checkpoints};
 
   % ── Arrows ─────────────────────────────────────────────────────────────────
   \draw[arr] (fe)    -- node[lbl, above] {HTTP/SSE}    (api);
@@ -83,7 +83,7 @@
   \draw[arr] (agent.north east) -- node[lbl, above, sloped] {stdio JSON-RPC} (mcp.west);
   \draw[arr] (agent.south east) -- node[lbl, below, sloped] {direct call}    (rag.west);
   \draw[arr] (mcp)   -- (sqlite);
-  \draw[arr] (rag)   -- (chroma);
+  \draw[arr] (agent.south east) to[bend right=10] (chroma.west);
 
   % ── Layer background bands ─────────────────────────────────────────────────
   \begin{scope}[on background layer]
@@ -113,7 +113,7 @@
 
 \section{Architecture}
 
-The diagram above shows the four layers. The browser communicates with a FastAPI backend that streams responses as Server-Sent Events (SSE). The reasoning layer is a LangGraph \textbf{supervisor} \texttt{StateGraph} that routes each user turn to one of four scoped \texttt{create\_react\_agent} specialist subgraphs; a hop cap of 3 prevents routing loops. Specialists dispatch to five FastMCP subprocess servers via stdin/stdout JSON-RPC, or to in-process LangChain knowledge tools backed by ChromaDB. All structured state lives in SQLite; conversation and interrupt checkpoints live in \texttt{MemorySaver}.
+The live site is a static Next.js export served from a private S3 bucket through CloudFront. The browser calls a public, response-streaming Lambda Function URL whose container runs FastAPI, LangGraph, and five MCP subprocesses. A LangGraph \textbf{supervisor} \texttt{StateGraph} routes each turn to one of four scoped \texttt{create\_react\_agent} specialist subgraphs; a hop cap of 3 prevents routing loops. Specialists dispatch over stdin/stdout JSON-RPC or call the in-process Chroma/BM25 knowledge tools. Mock SaaS state lives in SQLite under Lambda \texttt{/tmp}; durable conversation and interrupt checkpoints live in DynamoDB.
 
 \section{AI Agent Application}
 
@@ -128,6 +128,8 @@ The supervisor is a pure router — it uses structured output (\texttt{Route\{ne
 
 Specialists are written as collaborators: they ask one focused question when information is missing, propose changes before writing, and narrate progress briefly. Direct imperatives with full values execute immediately — the HITL gate is the final review, not a substitute for conversation.
 
+Amazon Bedrock Nova is the AWS chat provider and Titan Text Embeddings v2 builds the RAG index. Local development keeps the OpenAI/Ollama provider path.
+
 \subsection{RAG Pipeline (3 production techniques)}
 \begin{enumerate}
   \item \textbf{Cosine similarity} — ChromaDB collection configured with \texttt{hnsw:space=cosine} so relevance is magnitude-independent.
@@ -137,7 +139,7 @@ Specialists are written as collaborators: they ask one focused question when inf
 
 \section{Human-in-the-Loop}
 
-Eight destructive tools (every \texttt{update\_*}, \texttt{add\_to\_slack\_channels}, \texttt{assign\_salesforce\_permission\_set}, \texttt{complete\_training\_module}, \texttt{request\_manager\_approval}, \texttt{submit\_it\_ticket}) are wrapped at load time with a LangGraph \texttt{interrupt()} gate. When a specialist calls one, the graph pauses, the API emits an \texttt{approval\_required} SSE event, and the frontend renders an inline approval card where the user can review arguments, \textbf{edit any string field}, then approve or reject. Only changed keys are sent as \texttt{edited\_args}; the wrapper merges them (\texttt{\{**kwargs, **edited\_args\}}) before invoking the underlying tool. State is checkpointed by \texttt{MemorySaver} so the approval survives across separate HTTP turns; rejections are fed back as a \texttt{[SKIPPED]} tool message the specialist handles gracefully.
+Eight destructive tools (every \texttt{update\_*}, \texttt{add\_to\_slack\_channels}, \texttt{assign\_salesforce\_permission\_set}, \texttt{complete\_training\_module}, \texttt{request\_manager\_approval}, \texttt{submit\_it\_ticket}) are wrapped at load time with a LangGraph \texttt{interrupt()} gate. When a specialist calls one, the graph pauses, the API emits an \texttt{approval\_required} SSE event, and the frontend renders an inline approval card where the user can review arguments, \textbf{edit any string field}, then approve or reject. Only changed keys are sent as \texttt{edited\_args}; the wrapper merges them (\texttt{\{**kwargs, **edited\_args\}}) before invoking the underlying tool. State is checkpointed by DynamoDB on AWS or \texttt{MemorySaver} locally, so the approval survives across separate HTTP turns; rejections are fed back as a \texttt{[SKIPPED]} tool message the specialist handles gracefully.
 
 \section{Evaluation}
 
@@ -149,28 +151,32 @@ A golden-dataset harness (\texttt{python -m evals.run\_evals}) exercises the ful
 
 \textbf{MCP communication:} Each of the five servers is a subprocess spawned at startup. \texttt{langchain-mcp-adapters} serialises tool calls to JSON-RPC over stdin/stdout; the HITL wrapper sits between the adapter and the specialist so gating is transparent to both sides.
 
-\textbf{Memory:} \texttt{MemorySaver} keeps per-employee conversation history \textit{and} graph interrupt state keyed by \texttt{thread\_id}, so multi-turn context and paused approvals both survive between HTTP requests.
+\textbf{Memory:} \texttt{DynamoDBSaver} on AWS (or \texttt{MemorySaver} locally) keeps per-employee conversation history \textit{and} graph interrupt state keyed by \texttt{thread\_id}, so multi-turn context and paused approvals survive between HTTP requests and, on AWS, Lambda recycling.
+
+\section{AWS Deployment}
+
+Terraform provisions CloudFront, a private S3 frontend origin, a public Lambda Function URL, ECR, DynamoDB checkpoints, CloudWatch logs, and an EventBridge warmer. GitHub Actions assumes an IAM role through OIDC only from the public repository's \texttt{main} branch and allowed environments. Deployments tag the backend image with the commit SHA, apply Terraform, bake the emitted API URL into the frontend, synchronize S3, invalidate CloudFront, and smoke-test health plus all 20 tools. Live site: \href{https://d2j7378c90nw96.cloudfront.net}{d2j7378c90nw96.cloudfront.net}.
 
 \section{Trade-offs \& Considerations}
 
 \subsection{Assumptions \& Trade-offs}
 \begin{itemize}
-  \item \textbf{In-process RAG} — ChromaDB's embedded SQLite is unsafe for cross-process access on Windows. Knowledge tools run in the main process, sacrificing isolation to avoid file-lock deadlocks.
-  \item \textbf{SQLite} — appropriate for development; production requires PostgreSQL with connection pooling.
+  \item \textbf{In-process RAG} — ChromaDB's embedded SQLite is unsafe for cross-process access. Knowledge tools run in the main process, sacrificing isolation to avoid file-lock deadlocks.
+  \item \textbf{Ephemeral mock data} — Lambda stores SQLite, Chroma, and BM25 under \texttt{/tmp}. New or concurrent execution environments can reset or diverge; only DynamoDB graph checkpoints are durable.
   \item \textbf{Mock MCP servers} — simulate Workday, ServiceNow, Slack, Salesforce, and an LMS. Production integration needs OAuth, rate limiting, and idempotency guards.
-  \item \textbf{In-RAM checkpointer} — \texttt{MemorySaver} is single-process only; multi-instance deployments need \texttt{PostgresSaver} or a Redis-backed checkpointer.
+  \item \textbf{Public demo} — the Function URL has no AWS authentication. CORS restricts browsers but does not authenticate callers.
 \end{itemize}
 
 \subsection{Scalability}
-The FastAPI layer is stateless per request. Horizontal scaling requires an external checkpointer. The BM25 index rebuilds at startup — fine for a static knowledge corpus; a dynamic knowledge base needs incremental indexing. ChromaDB should be replaced by a managed vector store (Pinecone, Weaviate, or PostgreSQL \texttt{pgvector}) at production scale.
+The DynamoDB checkpointer supports Lambda process churn, but the mock SQLite systems do not provide shared horizontal state. The BM25 index rebuilds at startup — fine for a static knowledge corpus; a dynamic knowledge base needs incremental indexing and a managed vector store. Real SaaS integrations should replace the embedded mock database.
 
 \subsection{Security \& Governance}
 \begin{itemize}
-  \item All responses are scoped to the requesting \texttt{employee\_id}.
+  \item \texttt{employee\_id} selects mock data; it is not identity or authorization.
   \item Sensitive fields (salary, SSN) should be excluded via field-level access control before reaching LLM context.
-  \item All tool invocations are audit-logged via \texttt{structlog}; these should be shipped to a SIEM.
-  \item The \texttt{POST /api/admin/reset-db} endpoint must be gated by RBAC before deployment.
-  \item The Ollama path (self-hosted models) satisfies data-residency and air-gapped deployment requirements.
+  \item CloudWatch receives structured logs; production audit events should be shipped to a SIEM with PII controls.
+  \item The API and \texttt{/api/admin/reset-db} require authentication, RBAC, and rate limiting before real data is used.
+  \item Reserved concurrency is disabled for the current account quota, so it is not a spend cap. Add Budgets/alarms and throttling; Bedrock, Lambda, the warmer, logs, ECR, DynamoDB, S3, and CloudFront can incur charges.
 \end{itemize}
 
 \end{multicols}
@@ -216,8 +222,8 @@ The FastAPI layer is stateless per request. Horizontal scaling requires an exter
 
   % ── Shared state ───────────────────────────────────────────────────────────
   \node[bb=cgray, text width=13.6cm] at (7.0,-1.3) (shared)
-      {\texttt{MemorySaver} \textmd{(conversation + interrupt checkpoints)}
-       · SQLite · ChromaDB};
+      {\texttt{DynamoDBSaver} \textmd{on AWS / \texttt{MemorySaver} locally}
+       · SQLite + ChromaDB in Lambda \texttt{/tmp}};
 
   % ── Eval harness ───────────────────────────────────────────────────────────
   \node[bb=cpurple, text width=13.6cm] at (7.0,-2.4) (evals)
@@ -244,7 +250,7 @@ The FastAPI layer is stateless per request. Horizontal scaling requires an exter
 \end{tikzpicture}
 \end{center}
 
-\noindent{\footnotesize The supervisor is a pure router; each specialist is a \texttt{create\_react\_agent} subgraph with a \textit{scoped} toolbox, so tool choice stays tight by construction. Eight destructive tools pass through an \texttt{interrupt()} wrapper that surfaces an editable approval card to the user before the write is executed; \texttt{MemorySaver} checkpoints the paused graph so approvals survive across separate HTTP turns. An end-to-end evaluation harness exercises the full graph against a 15-case golden dataset and gates CI on routing, tool-trajectory, tool-choice, and response-contains failures.}
+\noindent{\footnotesize The supervisor is a pure router; each specialist is a \texttt{create\_react\_agent} subgraph with a \textit{scoped} toolbox, so tool choice stays tight by construction. Eight destructive tools pass through an \texttt{interrupt()} wrapper that surfaces an editable approval card before a write; DynamoDB checkpoints the paused graph on AWS. The public demo runs behind CloudFront with a response-streaming Lambda backend, Bedrock models, and Terraform/GitHub Actions delivery. A 15-case golden dataset gates CI on routing, tool-trajectory, tool-choice, and response-contains failures.}
 
 \vspace{4pt}
 \techfoot

@@ -1,0 +1,126 @@
+name: Deploy Onboarding Agent
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, test, prod]
+
+# OIDC, not stored access keys. The role is created by scripts/bootstrap.sh.
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  # Terraform holds a DynamoDB lock; two concurrent applies against the same
+  # workspace would just queue and then fight. Serialise them here instead.
+  group: deploy-${{ github.event.inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment || 'dev' }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-deploy
+          aws-region: ${{ secrets.DEFAULT_AWS_REGION }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: '1.9.8'
+          # Required: the wrapper wraps stdout and breaks `terraform output -raw`.
+          terraform_wrapper: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Terraform format check
+        working-directory: ./terraform
+        run: terraform fmt -check -recursive
+
+      - name: Deploy
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          DEFAULT_AWS_REGION: ${{ secrets.DEFAULT_AWS_REGION }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          chmod +x scripts/deploy.sh
+          ./scripts/deploy.sh "${{ github.event.inputs.environment || 'dev' }}"
+
+      - name: Read stack outputs
+        id: tf
+        working-directory: ./terraform
+        run: |
+          terraform workspace select "${{ github.event.inputs.environment || 'dev' }}"
+          {
+            echo "site_url=$(terraform output -raw cloudfront_url)"
+            echo "api_url=$(terraform output -raw api_url)"
+            echo "function_name=$(terraform output -raw lambda_function_name)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        run: |
+          API="${{ steps.tf.outputs.api_url }}"
+
+          # First call after a deploy is a cold start: five MCP subprocesses
+          # spawn, 18 tools are discovered and the vector index rebuilds. Give
+          # it real time rather than failing the pipeline on a slow boot.
+          echo "Waiting for cold start (up to 180s)..."
+          for i in $(seq 1 18); do
+            if curl -fsS --max-time 20 "${API%/}/health" >/dev/null 2>&1; then
+              echo "Healthy after ~$((i * 10))s"
+              break
+            fi
+            if [ "$i" -eq 18 ]; then
+              echo "::error::Backend never became healthy. Check the CloudWatch log group for ${{ steps.tf.outputs.function_name }}."
+              exit 1
+            fi
+            sleep 10
+          done
+
+          # A healthy /health only proves uvicorn is up. This proves the MCP
+          # subprocesses actually started and their tools were discovered —
+          # the failure mode a health check cannot see.
+          TOOLS=$(curl -fsS --max-time 30 "${API%/}/api/admin/mcp-servers" | grep -o '"total_tools":[0-9]*' | cut -d: -f2)
+          echo "Tools discovered: ${TOOLS:-0}"
+          if [ "${TOOLS:-0}" -lt 20 ]; then
+            echo "::error::Expected 20 tools (18 MCP + 2 knowledge), got ${TOOLS:-0}. An MCP subprocess failed to start."
+            exit 1
+          fi
+
+      - name: Summary
+        run: |
+          {
+            echo "## Deployed to ${{ github.event.inputs.environment || 'dev' }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Site | ${{ steps.tf.outputs.site_url }} |"
+            echo "| API | ${{ steps.tf.outputs.api_url }} |"
+            echo "| Image tag | \`${{ github.sha }}\` |"
+            echo ""
+            echo "Logs: \`aws logs tail /aws/lambda/${{ steps.tf.outputs.function_name }} --follow\`"
+          } >> "$GITHUB_STEP_SUMMARY"

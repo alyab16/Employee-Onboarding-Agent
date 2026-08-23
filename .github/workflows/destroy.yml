@@ -1,0 +1,71 @@
+name: Destroy Onboarding Agent
+
+# Manual only. There is no trigger that can fire this by accident.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to destroy'
+        required: true
+        type: choice
+        options: [dev, test, prod]
+      confirm:
+        description: 'Type the environment name again to confirm'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    name: Destroy ${{ github.event.inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+
+    steps:
+      - name: Confirm the environment name matches
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "${{ github.event.inputs.environment }}" ]; then
+            echo "::error::Confirmation '${{ github.event.inputs.confirm }}' does not match environment '${{ github.event.inputs.environment }}'. Nothing was destroyed."
+            exit 1
+          fi
+          echo "Destroying ${{ github.event.inputs.environment }}."
+          echo "This deletes the DynamoDB checkpoint table — every conversation and pending approval in this environment."
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-destroy
+          aws-region: ${{ secrets.DEFAULT_AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: '1.9.8'
+          terraform_wrapper: false
+
+      - name: Destroy
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          DEFAULT_AWS_REGION: ${{ secrets.DEFAULT_AWS_REGION }}
+        run: |
+          chmod +x scripts/destroy.sh
+          ./scripts/destroy.sh "${{ github.event.inputs.environment }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "## Destroyed ${{ github.event.inputs.environment }}"
+            echo ""
+            echo "The Terraform state bucket and lock table are account-level and were left in place."
+          } >> "$GITHUB_STEP_SUMMARY"

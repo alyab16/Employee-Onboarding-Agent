@@ -10,6 +10,9 @@
 ![SQLite](https://img.shields.io/badge/SQLite-SQLModel-6366F1?style=flat&logo=sqlite&logoColor=white)
 ![ChromaDB](https://img.shields.io/badge/ChromaDB-RAG-EC4899?style=flat)
 ![LangSmith](https://img.shields.io/badge/LangSmith-Tracing-14B8A6?style=flat)
+![AWS](https://img.shields.io/badge/AWS-Lambda%20%7C%20Bedrock%20%7C%20CloudFront-FF9900?style=flat&logo=amazonwebservices&logoColor=white)
+
+**Live demo:** [https://d2j7378c90nw96.cloudfront.net](https://d2j7378c90nw96.cloudfront.net)
 
 ---
 
@@ -17,16 +20,40 @@
 
 The **Employee Onboarding Agent** is a full-stack agentic application built as a production-minded prototype. It demonstrates:
 
-- **Multi-agent supervisor architecture** - a LangGraph supervisor routes each user turn to one of four scoped specialist ReAct agents (HR Profile, Training Coach, IT Access, Knowledge Expert). Multi-domain requests can chain specialists in a single turn.
-- **Ask-first specialists** - specialists propose a plan and ask for missing information (timezone, preferred display name, which systems to request) before firing writes. Clear imperatives with full values still execute immediately; the HITL gate is the final review.
-- **Human-in-the-loop for every write** - destructive tools (profile updates, training completions, approval requests, IT tickets) pause the graph via LangGraph `interrupt()`. An inline approval card lets the user review, **edit the tool's arguments**, then approve or reject - the run resumes only after the decision.
-- **MCP-style extensibility** - each SaaS integration is a standalone FastMCP server; adding a new one requires zero changes to the orchestration logic
-- **Production RAG** over 7 internal policy documents - hybrid BM25 keyword + vector semantic search merged via Reciprocal Rank Fusion, contextual chunking (each chunk prefixed with document title and section header), and cosine similarity (HNSW). Automatic rebuild when documents or the embedding provider changes
-- **Evaluation harness** - a 15-case golden dataset graded by four deterministic evaluators plus an LLM-as-judge; exits non-zero on any hard-gate regression so it can plug straight into CI
-- **Persistent state** - all structured data backed by SQLite via SQLModel; interrupt/resume state checkpointed per-employee so approvals survive across separate HTTP turns
-- **Real-time streaming** - SSE delivers specialist handoffs, tool calls, approval requests, and response tokens to the frontend as they happen
-- **Rich markdown rendering** - agent responses rendered with full formatting (headings, lists, code blocks, tables)
-- **LangSmith tracing** - full visibility into every supervisor decision, specialist hop, tool call, and token
+- **Multi-agent supervisor architecture** — a LangGraph supervisor routes each user turn to one of four scoped specialist ReAct agents (HR Profile, Training Coach, IT Access, Knowledge Expert). Multi-domain requests can chain specialists in a single turn.
+- **Ask-first specialists** — specialists propose a plan and ask for missing information (timezone, preferred display name, which systems to request) before firing writes. Clear imperatives with full values still execute immediately; the HITL gate is the final review.
+- **Human-in-the-loop for every write** — destructive tools (profile updates, training completions, approval requests, IT tickets) pause the graph via LangGraph `interrupt()`. An inline approval card lets the user review, **edit the tool's arguments**, then approve or reject — the run resumes only after the decision.
+- **MCP-style extensibility** — each SaaS integration is a standalone FastMCP server; adding a new one requires zero changes to the orchestration logic
+- **Production RAG** over 7 internal policy documents — hybrid BM25 keyword + vector semantic search merged via Reciprocal Rank Fusion, contextual chunking (each chunk prefixed with document title and section header), and cosine similarity (HNSW). Automatic rebuild when documents or the embedding provider changes
+- **Evaluation harness** — a 15-case golden dataset graded by four deterministic evaluators plus an LLM-as-judge; exits non-zero on any hard-gate regression so it can plug straight into CI
+- **Persistent graph state** — conversation and interrupt/resume checkpoints use DynamoDB on AWS and `MemorySaver` locally. Mock SaaS records remain in SQLite via SQLModel
+- **Real-time streaming** — SSE delivers specialist handoffs, tool calls, approval requests, and response tokens to the frontend as they happen
+- **Rich markdown rendering** — agent responses rendered with full formatting (headings, lists, code blocks, tables)
+- **LangSmith tracing** — full visibility into every supervisor decision, specialist hop, tool call, and token
+
+---
+
+## Live AWS Deployment
+
+The public demo is deployed as a serverless AWS stack managed by Terraform and GitHub Actions:
+
+```mermaid
+flowchart LR
+    User([Browser]) --> CF[CloudFront]
+    CF --> S3[(Private S3 frontend bucket)]
+    User -->|HTTPS + SSE| URL[Public Lambda Function URL]
+    URL --> L[Lambda container<br/>FastAPI + LangGraph + 5 MCP subprocesses]
+    L --> BR[Amazon Bedrock<br/>Nova + Titan embeddings]
+    L --> DDB[(DynamoDB<br/>conversation + HITL checkpoints)]
+    L --> TMP[(/tmp<br/>SQLite + ChromaDB + BM25)]
+    ECR[(ECR)] --> L
+    EB[EventBridge warmer] --> L
+    L --> CW[CloudWatch Logs]
+```
+
+CloudFront serves a static Next.js export from a private S3 bucket through Origin Access Control. The browser calls the FastAPI backend through a Lambda Function URL configured for response streaming. The Lambda container uses Amazon Bedrock Nova for chat, Titan Text Embeddings v2 for RAG, and DynamoDB for LangGraph checkpoints. ECR stores immutable backend images; EventBridge pings `/health` to reduce cold starts; CloudWatch captures runtime logs.
+
+The SQLite mock-system database, Chroma index, and BM25 cache live in Lambda `/tmp`. They can be rebuilt or reset whenever AWS creates a new execution environment, and concurrent environments can hold independent mock-data copies. DynamoDB conversation and approval checkpoints persist independently of those files.
 
 ---
 
@@ -65,11 +92,11 @@ flowchart TB
             HRP & TRC & ITA & KNW -.-> Sup
         end
         HITL["⏸ HITL interrupt()\nwraps destructive tools"]:::hitl
-        Mem["💾 MemorySaver\nper-employee thread\n(+ interrupt state)"]:::agent
+        Mem["💾 DynamoDBSaver (AWS)\nMemorySaver (local)\nper-employee checkpoints"]:::agent
         KT["🔍 Knowledge Tools\nin-process RAG"]:::rag
     end
 
-    LLM["🤖 OpenAI GPT\nor Ollama"]:::llm
+    LLM["🤖 Amazon Bedrock Nova (AWS)\nOpenAI or Ollama (local)"]:::llm
     LS["📊 LangSmith\nTracing"]:::trace
 
     subgraph MCP ["MCP Servers - FastMCP (stdio transport)"]
@@ -81,8 +108,8 @@ flowchart TB
         IT["🎫 IT Ticketing"]:::mcp
     end
 
-    SQLite[("🗄️ SQLite\ndata.db")]:::db
-    Chroma[("🔮 ChromaDB\nVector Store")]:::rag
+    SQLite[("🗄️ SQLite\ndata.db · /tmp on Lambda")]:::db
+    Chroma[("🔮 ChromaDB\nVector Store · /tmp on Lambda")]:::rag
     Docs["📄 7 × Policy\nMarkdown Docs"]:::rag
 
     User <--> Chat
@@ -174,9 +201,9 @@ Eight tools are gated - every `update_*`, `add_to_slack_channels`,
 `assign_salesforce_permission_set`, `complete_training_module`,
 `request_manager_approval`, and `submit_it_ticket`. The wrapper calls
 `interrupt()` before invoking the underlying MCP tool; state is checkpointed
-by the same `MemorySaver` that stores conversation history, so an approval
-request survives across two separate HTTP turns without any server-side
-session state. Rejections are delivered back to the agent as a
+by the configured LangGraph checkpointer (`DynamoDBSaver` on AWS,
+`MemorySaver` locally), so an approval request survives across two separate
+HTTP turns without API-process session state. Rejections are delivered back to the agent as a
 `[SKIPPED] <tool> was not executed. <reason>` tool message, which the
 specialist handles gracefully ("Understood - I'll leave your profile as-is").
 
@@ -376,17 +403,20 @@ flowchart TB
 |---|---|---|
 | **Frontend** | Next.js 16, React 19, Tailwind CSS v4, react-markdown | Chat UI, SSE streaming, markdown rendering |
 | **Backend** | FastAPI, Python 3.13, Uvicorn | REST API, SSE endpoint, app lifecycle |
-| **Agent Orchestration** | LangGraph `StateGraph` + `create_react_agent` subgraphs | Supervisor routing + four scoped specialists + per-employee MemorySaver |
+| **Agent Orchestration** | LangGraph `StateGraph` + `create_react_agent` subgraphs | Supervisor routing + four scoped specialists + per-employee checkpoints |
 | **Human-in-the-Loop** | LangGraph `interrupt()` + `Command(resume=...)` | Approval gate before every destructive tool; state checkpointed across HTTP turns |
 | **Evaluation** | Custom harness + LangSmith tracing | 15-case golden dataset · 4 deterministic scorers + LLM-as-judge |
-| **LLM** | OpenAI GPT-4o-mini / Ollama | Reasoning, tool selection, response generation |
+| **LLM** | Amazon Bedrock Nova on AWS; OpenAI GPT-4o-mini / Ollama locally | Reasoning, tool selection, response generation |
 | **MCP Servers** | FastMCP 2.3 | 5 independent mock SaaS integrations (stdio) |
 | **MCP Client** | langchain-mcp-adapters | Bridges LangGraph ↔ MCP stdio protocol |
 | **Knowledge Tools** | LangChain `@tool` + ChromaDB + rank-bm25 | In-process hybrid RAG: BM25 keyword + vector semantic search via Reciprocal Rank Fusion, contextual chunking, cosine similarity |
 | **Structured Data** | SQLModel + SQLite | Employees, training, approvals, tickets |
 | **Vector Store** | ChromaDB + langchain-chroma | Semantic search with auto-rebuild on provider change |
-| **Embeddings** | OpenAI `text-embedding-3-small` / Ollama `nomic-embed-text` | Document indexing and query embedding |
-| **Logging** | structlog | Structured JSON file logs + pretty console |
+| **Embeddings** | Amazon Titan Text Embeddings v2 on AWS; OpenAI / Ollama locally | Document indexing and query embedding |
+| **Graph Checkpoints** | DynamoDB on AWS; LangGraph `MemorySaver` locally | Durable conversation history and HITL resume state |
+| **AWS Hosting** | CloudFront, private S3, Lambda Function URL, ECR, EventBridge | Static frontend, streaming API container, image registry, cold-start warmer |
+| **Infrastructure** | Terraform + GitHub Actions OIDC | Reproducible environments without long-lived AWS access keys |
+| **Logging** | structlog + CloudWatch Logs on AWS | Structured application and platform logs |
 | **Tracing** | LangSmith | Full agent run visibility |
 
 ---
@@ -407,7 +437,7 @@ EmployeeOnboardingAgent/
 │       ├── page.tsx                   # Root: selector → chat
 │       └── layout.tsx
 │
-└── backend/                           # FastAPI + LangGraph application
+├── backend/                           # FastAPI + LangGraph application
     ├── main.py                        # App entry point, startup sequence
     │
     ├── agent/
@@ -460,14 +490,19 @@ EmployeeOnboardingAgent/
     ├── data.db                        # SQLite database (auto-created)
     ├── chroma_db/                     # ChromaDB persistence (auto-created)
     ├── requirements.txt
-    └── .env
+│   └── .env
+├── terraform/                         # AWS serverless stack and environment variables
+├── scripts/                           # Bootstrap, deploy, and destroy automation
+├── .github/workflows/                 # Main-branch deploy + manual destroy workflows
+├── solution_design/                   # TeX source and generated solution-design PDF
+└── docker-compose.yml                 # Local full-stack development
 ```
 
 ---
 
 ## Getting Started
 
-Two supported paths: **Docker** (fastest, one command) or **local development** (hot reload, direct access to `uv` / `npm`). Pick whichever suits your workflow.
+Use the [live AWS demo](https://d2j7378c90nw96.cloudfront.net), or run locally through **Docker** (fastest, one command) or **local development** (hot reload, direct access to `uv` / `npm`).
 
 ### Option A - Docker (recommended)
 
@@ -592,10 +627,15 @@ Open [http://localhost:3000](http://localhost:3000), select an employee, and sta
 |---|---|---|
 | `OPENAI_API_KEY` | - | OpenAI key. If unset, Ollama is used |
 | `MODEL_ID` | `gpt-4o-mini` | OpenAI model ID |
+| `BEDROCK_MODEL_ID` | — | Bedrock chat model or inference profile; takes precedence when set |
+| `BEDROCK_EMBED_MODEL_ID` | — | Bedrock embedding model; AWS uses `amazon.titan-embed-text-v2:0` |
 | `OLLAMA_MODEL` | `llama3.1:8b` | Ollama chat model |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model |
 | `CORS_ORIGINS` | `http://localhost:3000` | Allowed frontend origins |
+| `CHECKPOINT_TABLE` | — | DynamoDB table for LangGraph state; if unset, uses local `MemorySaver` |
+| `DB_PATH` | `backend/data.db` | SQLite mock-system database; AWS sets a path under `/tmp` |
+| `CHROMA_PATH` | `backend/chroma_db` | Chroma/BM25 storage; AWS sets a path under `/tmp` |
 | `MAX_TOKENS` | `4096` | Max tokens per LLM response |
 | `AUTO_APPROVE_SECONDS` | `30` | Seconds before manager approval auto-approves (demo) |
 | `LANGCHAIN_TRACING_V2` | - | Set to `true` to enable LangSmith |
@@ -607,6 +647,48 @@ Open [http://localhost:3000](http://localhost:3000), select an employee, and sta
 | Variable | Default | Description |
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend API base URL |
+
+---
+
+## AWS Deployment and Operations
+
+Deployments are owned by the public repository and run only after a change reaches `main` (or through a permitted manual dispatch). The GitHub `dev`, `test`, and `prod` environments must contain `AWS_ROLE_ARN`, `AWS_ACCOUNT_ID`, and `DEFAULT_AWS_REGION`. GitHub obtains short-lived AWS credentials through OIDC; do not add static AWS access keys.
+
+The account-level Terraform backend must exist before the first deployment:
+
+- S3 bucket: `onboarding-terraform-state-<account-id>`
+- DynamoDB lock table: `onboarding-terraform-locks`
+
+The deploy workflow formats Terraform, builds and pushes a commit-SHA-tagged Lambda image, applies the stack, builds the frontend with the emitted Function URL, syncs the static export to S3, invalidates CloudFront, and smoke-tests `/health` plus the expected 20 tools.
+
+Useful operational commands:
+
+```bash
+# Tail backend logs
+aws logs tail /aws/lambda/onboarding-dev-api --follow --region us-east-1
+
+# Read the deployed URLs
+cd terraform
+terraform workspace select dev
+terraform output -raw cloudfront_url
+terraform output -raw api_url
+
+# Roll back application code by redeploying a known-good commit/image tag
+# through the workflow. Do not create a new Terraform backend or destroy the
+# stack merely to move deployment ownership between repositories.
+```
+
+Teardown is deliberately manual. Run **Destroy Onboarding Agent**, select the environment, and type its name again. This deletes that environment's application resources and DynamoDB checkpoint data, while leaving the account-level Terraform state bucket and lock table in place.
+
+### Security and cost limitations
+
+This is a public demonstration, not a production identity boundary:
+
+- The Lambda Function URL uses `authorization_type = "NONE"`; anyone who discovers it can call the API. CORS limits browser origins but is not authentication.
+- Employee selection and `employee_id` are mock behavior, not authorization. The admin endpoints—including database reset—must be protected or removed before real employee data is used.
+- The current AWS account quota required `lambda_reserved_concurrency = -1`, so reserved concurrency is not acting as a cost ceiling. Add authentication, throttling/rate limiting, AWS Budgets/alarms, and an appropriate concurrency control before broader exposure.
+- Bedrock tokens, Lambda duration, EventBridge warmer invocations, CloudWatch logs, ECR storage, DynamoDB, S3, and CloudFront can incur charges. The warmer intentionally trades a small ongoing cost for fewer cold starts.
+- Keep the GitHub OIDC trust restricted to this repository, `refs/heads/main`, and the intended GitHub environments. Never commit credentials, `.env` files, Terraform state, or local `.claude` settings.
 
 ---
 
@@ -704,7 +786,7 @@ The agent discovers the new tools automatically on next startup - no other chang
 
 Drop any `.md` file into `backend/knowledge_docs/`. The vector store automatically detects the change via content hash on the next startup and re-indexes.
 
-Switching between OpenAI and Ollama embeddings also triggers an automatic rebuild - no manual cleanup required.
+Switching among Bedrock, OpenAI, and Ollama embeddings also triggers an automatic rebuild — no manual cleanup required.
 
 ---
 
@@ -720,7 +802,7 @@ curl -X POST http://localhost:8000/api/admin/reset-db
 rm backend/data.db    # re-created on next startup
 ```
 
-Conversation history (LangGraph MemorySaver) is in-memory only and resets on every backend restart.
+Conversation history uses in-memory `MemorySaver` locally and therefore resets on a backend restart. On AWS it is stored in DynamoDB and survives Lambda recycling until the thread is deleted or the environment is destroyed. The mock SQLite records and Chroma/BM25 files are ephemeral in Lambda `/tmp` and may be independently rebuilt in each execution environment.
 
 ---
 
@@ -761,7 +843,8 @@ under the configured project - invaluable for diagnosing failures. See
 |---|---|
 | **Console logs** | Pretty-printed structured logs per request |
 | **`logs/app.log`** | Rotating JSON logs (10 MB × 5 files) |
-| **LangSmith** | Full agent traces - every LLM call, tool call, token count, latency, and conversation thread |
+| **CloudWatch Logs** | Lambda startup failures, request logs, MCP discovery, and deployment diagnostics |
+| **LangSmith** | Full agent traces — every LLM call, tool call, token count, latency, and conversation thread |
 
 Enable LangSmith by adding to `.env`:
 ```env
