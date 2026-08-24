@@ -12,7 +12,7 @@
 ![LangSmith](https://img.shields.io/badge/LangSmith-Tracing-14B8A6?style=flat)
 ![AWS](https://img.shields.io/badge/AWS-Lambda%20%7C%20Bedrock%20%7C%20CloudFront-FF9900?style=flat&logo=amazonwebservices&logoColor=white)
 
-**Live demo:** [https://d3vzhwby5q4nxj.cloudfront.net/](https://d3vzhwby5q4nxj.cloudfront.net/)
+**Live demo:** [https://drqo3x5isyqpl.cloudfront.net](https://drqo3x5isyqpl.cloudfront.net)
 
 ---
 
@@ -20,16 +20,16 @@
 
 The **Employee Onboarding Agent** is a full-stack agentic application built as a production-minded prototype. It demonstrates:
 
-- **Multi-agent supervisor architecture** — a LangGraph supervisor routes each user turn to one of four scoped specialist ReAct agents (HR Profile, Training Coach, IT Access, Knowledge Expert). Multi-domain requests can chain specialists in a single turn.
-- **Ask-first specialists** — specialists propose a plan and ask for missing information (timezone, preferred display name, which systems to request) before firing writes. Clear imperatives with full values still execute immediately; the HITL gate is the final review.
-- **Human-in-the-loop for every write** — destructive tools (profile updates, training completions, approval requests, IT tickets) pause the graph via LangGraph `interrupt()`. An inline approval card lets the user review, **edit the tool's arguments**, then approve or reject — the run resumes only after the decision.
-- **MCP-style extensibility** — each SaaS integration is a standalone FastMCP server; adding a new one requires zero changes to the orchestration logic
-- **Production RAG** over 7 internal policy documents — hybrid BM25 keyword + vector semantic search merged via Reciprocal Rank Fusion, contextual chunking (each chunk prefixed with document title and section header), and cosine similarity (HNSW). Automatic rebuild when documents or the embedding provider changes
-- **Evaluation harness** — a 15-case golden dataset graded by four deterministic evaluators plus an LLM-as-judge; exits non-zero on any hard-gate regression so it can plug straight into CI
-- **Persistent graph state** — conversation and interrupt/resume checkpoints use DynamoDB on AWS and `MemorySaver` locally. Mock SaaS records remain in SQLite via SQLModel
-- **Real-time streaming** — SSE delivers specialist handoffs, tool calls, approval requests, and response tokens to the frontend as they happen
-- **Rich markdown rendering** — agent responses rendered with full formatting (headings, lists, code blocks, tables)
-- **LangSmith tracing** — full visibility into every supervisor decision, specialist hop, tool call, and token
+- **Multi-agent supervisor architecture** - a LangGraph supervisor routes each user turn to one of four scoped specialist ReAct agents (HR Profile, Training Coach, IT Access, Knowledge Expert). Multi-domain requests can chain specialists in a single turn.
+- **Ask-first specialists** - specialists propose a plan and ask for missing information (timezone, preferred display name, which systems to request) before firing writes. Clear imperatives with full values still execute immediately; the HITL gate is the final review.
+- **Human-in-the-loop for every write** - destructive tools (profile updates, training completions, approval requests, IT tickets) pause the graph via LangGraph `interrupt()`. An inline approval card lets the user review, **edit the tool's arguments**, then approve or reject - the run resumes only after the decision.
+- **MCP-style extensibility** - each SaaS integration is a standalone FastMCP server; adding a new one requires zero changes to the orchestration logic
+- **Production RAG** over 7 internal policy documents - hybrid BM25 keyword + vector semantic search merged via Reciprocal Rank Fusion, contextual chunking (each chunk prefixed with document title and section header), and cosine similarity (HNSW). Automatic rebuild when documents or the embedding provider changes
+- **Evaluation harness** - a 15-case golden dataset graded by four deterministic evaluators plus an LLM-as-judge; exits non-zero on any hard-gate regression so it can plug straight into CI
+- **Persistent graph state** - conversation and interrupt/resume checkpoints use DynamoDB on AWS and `MemorySaver` locally. Mock SaaS records remain in SQLite via SQLModel
+- **Real-time streaming** - SSE delivers specialist handoffs, tool calls, approval requests, and response tokens to the frontend as they happen
+- **Rich markdown rendering** - agent responses rendered with full formatting (headings, lists, code blocks, tables)
+- **LangSmith tracing** - full visibility into every supervisor decision, specialist hop, tool call, and token
 
 ---
 
@@ -627,13 +627,13 @@ Open [http://localhost:3000](http://localhost:3000), select an employee, and sta
 |---|---|---|
 | `OPENAI_API_KEY` | - | OpenAI key. If unset, Ollama is used |
 | `MODEL_ID` | `gpt-4o-mini` | OpenAI model ID |
-| `BEDROCK_MODEL_ID` | — | Bedrock chat model or inference profile; takes precedence when set |
-| `BEDROCK_EMBED_MODEL_ID` | — | Bedrock embedding model; AWS uses `amazon.titan-embed-text-v2:0` |
+| `BEDROCK_MODEL_ID` | - | Bedrock chat model or inference profile; takes precedence when set |
+| `BEDROCK_EMBED_MODEL_ID` | - | Bedrock embedding model; AWS uses `amazon.titan-embed-text-v2:0` |
 | `OLLAMA_MODEL` | `llama3.1:8b` | Ollama chat model |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model |
 | `CORS_ORIGINS` | `http://localhost:3000` | Allowed frontend origins |
-| `CHECKPOINT_TABLE` | — | DynamoDB table for LangGraph state; if unset, uses local `MemorySaver` |
+| `CHECKPOINT_TABLE` | - | DynamoDB table for LangGraph state; if unset, uses local `MemorySaver` |
 | `DB_PATH` | `backend/data.db` | SQLite mock-system database; AWS sets a path under `/tmp` |
 | `CHROMA_PATH` | `backend/chroma_db` | Chroma/BM25 storage; AWS sets a path under `/tmp` |
 | `MAX_TOKENS` | `4096` | Max tokens per LLM response |
@@ -685,7 +685,7 @@ Teardown is deliberately manual. Run **Destroy Onboarding Agent**, select the en
 This is a public demonstration, not a production identity boundary:
 
 - The Lambda Function URL uses `authorization_type = "NONE"`; anyone who discovers it can call the API. CORS limits browser origins but is not authentication.
-- Employee selection and `employee_id` are mock behavior, not authorization. The admin endpoints—including database reset—must be protected or removed before real employee data is used.
+- Employee selection and `employee_id` are mock behavior, not authorization. The admin endpoints-including database reset-must be protected or removed before real employee data is used.
 - The current AWS account quota required `lambda_reserved_concurrency = -1`, so reserved concurrency is not acting as a cost ceiling. Add authentication, throttling/rate limiting, AWS Budgets/alarms, and an appropriate concurrency control before broader exposure.
 - Bedrock tokens, Lambda duration, EventBridge warmer invocations, CloudWatch logs, ECR storage, DynamoDB, S3, and CloudFront can incur charges. The warmer intentionally trades a small ongoing cost for fewer cold starts.
 - Keep the GitHub OIDC trust restricted to this repository, `refs/heads/main`, and the intended GitHub environments. Never commit credentials, `.env` files, Terraform state, or local `.claude` settings.
@@ -786,7 +786,7 @@ The agent discovers the new tools automatically on next startup - no other chang
 
 Drop any `.md` file into `backend/knowledge_docs/`. The vector store automatically detects the change via content hash on the next startup and re-indexes.
 
-Switching among Bedrock, OpenAI, and Ollama embeddings also triggers an automatic rebuild — no manual cleanup required.
+Switching among Bedrock, OpenAI, and Ollama embeddings also triggers an automatic rebuild - no manual cleanup required.
 
 ---
 
@@ -844,7 +844,7 @@ under the configured project - invaluable for diagnosing failures. See
 | **Console logs** | Pretty-printed structured logs per request |
 | **`logs/app.log`** | Rotating JSON logs (10 MB × 5 files) |
 | **CloudWatch Logs** | Lambda startup failures, request logs, MCP discovery, and deployment diagnostics |
-| **LangSmith** | Full agent traces — every LLM call, tool call, token count, latency, and conversation thread |
+| **LangSmith** | Full agent traces - every LLM call, tool call, token count, latency, and conversation thread |
 
 Enable LangSmith by adding to `.env`:
 ```env
