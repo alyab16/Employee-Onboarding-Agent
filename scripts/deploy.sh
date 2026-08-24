@@ -74,7 +74,7 @@ aws ecr get-login-password --region "${REGION}" \
 # linux/amd64 explicitly: Lambda will not run an arm64 image built by default
 # on an Apple Silicon machine, and the failure surfaces as a runtime error
 # rather than a build one.
-docker build --platform linux/amd64 \
+docker build --pull --platform linux/amd64 \
   -f backend/Dockerfile.lambda \
   -t "${ECR_URL}:${IMAGE_TAG}" \
   -t "${ECR_URL}:latest" \
