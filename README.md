@@ -502,7 +502,7 @@ EmployeeOnboardingAgent/
 
 ## Getting Started
 
-Use the [live AWS demo](https://d2j7378c90nw96.cloudfront.net), or run locally through **Docker** (fastest, one command) or **local development** (hot reload, direct access to `uv` / `npm`).
+Use the [live AWS demo](https://drqo3x5isyqpl.cloudfront.net), or run locally through **Docker** (fastest, one command) or **local development** (hot reload, direct access to `uv` / `npm`).
 
 ### Option A - Docker (recommended)
 
